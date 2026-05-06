@@ -21,17 +21,27 @@ import {
 } from "@/components/ui/sidebar";
 import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
+import { ClipboardList, FileText, FlaskConical, LayoutDashboard, LogOut, PanelLeft, ScanLine, Users } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
-const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+type Role = "admin" | "doctor" | "patient";
+
+const ALL_MENU_ITEMS = [
+  { icon: LayoutDashboard, label: "Dashboard", path: "/",         roles: ["admin", "doctor", "patient"] as Role[] },
+  { icon: Users,           label: "Patients",  path: "/patients", roles: ["admin", "doctor"] as Role[] },
+  { icon: FlaskConical,    label: "Studies",   path: "/studies",  roles: ["admin", "doctor"] as Role[] },
+  { icon: ClipboardList,   label: "Worklist",  path: "/worklist", roles: ["doctor"] as Role[] },
+  { icon: FileText,        label: "Reports",   path: "/reports",  roles: ["admin", "doctor"] as Role[] },
+  { icon: ScanLine,        label: "Viewer",    path: "/viewer",   roles: ["admin", "doctor", "patient"] as Role[] },
 ];
+
+function getMenuItems(role: Role | undefined) {
+  return ALL_MENU_ITEMS.filter(item => !role || item.roles.includes(role));
+}
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
 const DEFAULT_WIDTH = 280;
@@ -122,7 +132,10 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find(item => item.path === location);
+  const menuItems = getMenuItems(user?.role as Role | undefined);
+  const activeMenuItem = menuItems.find(item =>
+    item.path === "/" ? location === "/" : location.startsWith(item.path)
+  );
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -211,7 +224,7 @@ function DashboardLayoutContent({
           <SidebarContent className="gap-0">
             <SidebarMenu className="px-2 py-1">
               {menuItems.map(item => {
-                const isActive = location === item.path;
+                const isActive = item.path === "/" ? location === "/" : location.startsWith(item.path);
                 return (
                   <SidebarMenuItem key={item.path}>
                     <SidebarMenuButton

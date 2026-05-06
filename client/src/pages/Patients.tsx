@@ -34,7 +34,7 @@ export default function Patients() {
               Manage patient records and information
             </p>
           </div>
-          <Link href="/patients/new">
+          <Link href="/patients/add">
             <Button>
               <Plus className="h-4 w-4 mr-2" />
               Add Patient

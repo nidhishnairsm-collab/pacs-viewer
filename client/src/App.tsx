@@ -13,6 +13,8 @@ import Viewer from "./pages/Viewer";
 import Dashboard from "./pages/Dashboard";
 import Patients from "./pages/Patients";
 import Studies from "./pages/Studies";
+import Worklist from "./pages/Worklist";
+import Reports from "./pages/Reports";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -25,6 +27,8 @@ function Router() {
       <Route path="/patients/:id" component={PatientDetail} />
       <Route path="/studies" component={Studies} />
       <Route path="/studies/:id" component={StudyDetail} />
+      <Route path="/worklist" component={Worklist} />
+      <Route path="/reports" component={Reports} />
       <Route path="/viewer" component={Viewer} />
       <Route path="/login" component={Login} />
       <Route path="/upload/:token" component={GuestUpload} />
