@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { 
-  Upload, 
-  MousePointer2, 
-  Move, 
-  ZoomIn, 
-  RotateCw, 
-  Ruler, 
+import {
+  Upload,
+  MousePointer2,
+  Move,
+  ZoomIn,
+  RotateCw,
+  Ruler,
   Type,
   ArrowRight,
+  ArrowLeft,
   Circle,
   Square,
-  Maximize2,
   FlipHorizontal,
   FlipVertical,
   RefreshCw,
@@ -52,6 +53,7 @@ const SAMPLE_FILES = [
 ];
 
 export default function Viewer() {
+  const [, setLocation] = useLocation();
   const [selectedTool, setSelectedTool] = useState<Tool>("windowLevel");
   const [layout, setLayout] = useState<Layout>("1x1");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -252,6 +254,14 @@ export default function Viewer() {
       {/* Header */}
       <header className="border-b border-border px-4 py-3 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => window.history.length > 1 ? window.history.back() : setLocation("/dashboard")}
+          >
+            <ArrowLeft className="w-4 h-4 mr-1" />
+            Back
+          </Button>
           <h1 className="text-lg md:text-xl font-bold text-foreground">Medical PACS Viewer</h1>
           <input
             ref={fileInputRef}

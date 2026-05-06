@@ -1,10 +1,8 @@
-import { useEffect, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye } from "lucide-react";
 import { EnhancedDicomViewer } from "@/components/EnhancedDicomViewer";
@@ -22,15 +20,14 @@ export default function StudyDetail() {
   const study = studyData?.study;
   const patient = studyData?.patient;
 
-  const [imageIds, setImageIds] = useState<string[]>([]);
+  const { data: instanceData } = trpc.instances.getByStudyId.useQuery(
+    { studyId: studyId! },
+    { enabled: !!studyId }
+  );
 
-  useEffect(() => {
-    // Use sample DICOM files from the public directory
-    // These are served at the root URL path
-    setImageIds([
-      "wadouri:/samples/CT_small.dcm",
-    ]);
-  }, [study]);
+  const imageIds: string[] = instanceData && instanceData.length > 0
+    ? instanceData.map(row => `wadouri:${row.instance.fileUrl}`)
+    : ["wadouri:/samples/CT_small.dcm"];
 
   if (isLoading) {
     return (

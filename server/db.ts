@@ -1,6 +1,6 @@
 import { eq, desc, and, like, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, patients, studies, series, instances, reports, InsertPatient, InsertStudy, doctorPatients, InsertDoctorPatient, studyAccess, InsertStudyAccess, uploadTokens, InsertUploadToken } from "../drizzle/schema";
+import { InsertUser, users, patients, studies, series, instances, reports, InsertPatient, InsertStudy, InsertSeries, InsertInstance, doctorPatients, InsertDoctorPatient, studyAccess, InsertStudyAccess, uploadTokens, InsertUploadToken } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -75,6 +75,13 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
   }
+}
+
+export async function getUserCount(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [result] = await db.select({ count: sql<number>`count(*)` }).from(users);
+  return Number(result.count);
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -189,16 +196,40 @@ export async function updateStudy(id: number, study: Partial<InsertStudy>) {
 export async function getSeriesByStudyId(studyId: number) {
   const db = await getDb();
   if (!db) return [];
-  
+
   return await db.select().from(series).where(eq(series.studyId, studyId));
+}
+
+export async function createSeries(s: InsertSeries) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(series).values(s);
 }
 
 // Instance queries
 export async function getInstancesBySeriesId(seriesId: number) {
   const db = await getDb();
   if (!db) return [];
-  
+
   return await db.select().from(instances).where(eq(instances.seriesId, seriesId));
+}
+
+export async function getInstancesByStudyId(studyId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db
+    .select({ instance: instances })
+    .from(instances)
+    .innerJoin(series, eq(instances.seriesId, series.id))
+    .where(eq(series.studyId, studyId))
+    .orderBy(instances.instanceNumber);
+}
+
+export async function createInstance(i: InsertInstance) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(instances).values(i);
 }
 
 // Report queries

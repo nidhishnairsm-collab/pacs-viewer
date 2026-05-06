@@ -135,7 +135,7 @@ export default function Dashboard() {
             <CardTitle>Quick Actions</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-3">
-            <Link href="/patients/new">
+            <Link href="/patients/add">
               <Button>
                 <Users className="h-4 w-4 mr-2" />
                 Add Patient

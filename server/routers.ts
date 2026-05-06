@@ -1,8 +1,11 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { sdk } from "./_core/sdk";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import * as db from "./db";
 import { doctorPatientRouter, studySharingRouter, uploadTokenRouter } from "./routers/doctorPatient";
 
@@ -11,12 +14,74 @@ export const appRouter = router({
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
+
+    register: publicProcedure
+      .input(z.object({
+        name: z.string().min(1),
+        email: z.string().email(),
+        password: z.string().min(8),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const openId = `local:${input.email}`;
+        const existing = await db.getUserByOpenId(openId);
+        if (existing) {
+          throw new TRPCError({ code: "CONFLICT", message: "Email already registered" });
+        }
+
+        const passwordHash = await bcrypt.hash(input.password, 10);
+        const isFirstUser = (await db.getUserCount()) === 0;
+
+        await db.upsertUser({
+          openId,
+          name: input.name,
+          email: input.email,
+          loginMethod: "local",
+          lastSignedIn: new Date(),
+          passwordHash,
+          role: isFirstUser ? "admin" : "patient",
+        });
+
+        const user = await db.getUserByOpenId(openId);
+        if (!user) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+        const sessionToken = await sdk.createSessionToken(openId, { name: input.name, expiresInMs: ONE_YEAR_MS });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+        return { success: true as const };
+      }),
+
+    login: publicProcedure
+      .input(z.object({
+        email: z.string().email(),
+        password: z.string(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const openId = `local:${input.email}`;
+        const user = await db.getUserByOpenId(openId);
+
+        if (!user || !user.passwordHash) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+        }
+
+        const valid = await bcrypt.compare(input.password, user.passwordHash);
+        if (!valid) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid email or password" });
+        }
+
+        await db.upsertUser({ openId, lastSignedIn: new Date() });
+
+        const sessionToken = await sdk.createSessionToken(openId, { name: user.name || "", expiresInMs: ONE_YEAR_MS });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+        return { success: true as const };
+      }),
+
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
+      return { success: true } as const;
     }),
   }),
 
@@ -159,6 +224,11 @@ export const appRouter = router({
       .input(z.object({ seriesId: z.number() }))
       .query(async ({ input }) => {
         return await db.getInstancesBySeriesId(input.seriesId);
+      }),
+    getByStudyId: protectedProcedure
+      .input(z.object({ studyId: z.number() }))
+      .query(async ({ input }) => {
+        return await db.getInstancesByStudyId(input.studyId);
       }),
   }),
 
