@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { ClipboardList, FileText, FlaskConical, LayoutDashboard, LogOut, PanelLeft, ScanLine, Users } from "lucide-react";
+import { ClipboardList, FileText, FlaskConical, LayoutDashboard, LogOut, PanelLeft, ScanLine, ShieldCheck, Users } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -37,6 +37,7 @@ const ALL_MENU_ITEMS = [
   { icon: ClipboardList,   label: "Worklist",  path: "/worklist", roles: ["doctor"] as Role[] },
   { icon: FileText,        label: "Reports",   path: "/reports",  roles: ["admin", "doctor"] as Role[] },
   { icon: ScanLine,        label: "Viewer",    path: "/viewer",   roles: ["admin", "doctor", "patient"] as Role[] },
+  { icon: ShieldCheck,     label: "Admin",     path: "/admin",    roles: ["admin"] as Role[] },
 ];
 
 function getMenuItems(role: Role | undefined) {

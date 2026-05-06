@@ -85,6 +85,32 @@ export const appRouter = router({
     }),
   }),
 
+  // Admin user management
+  users: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+      return await db.getAllUsers();
+    }),
+
+    updateRole: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        role: z.enum(["admin", "doctor", "patient"]),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+        if (input.id === ctx.user.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot change your own role" });
+        }
+        await db.updateUserRole(input.id, input.role);
+        return { success: true };
+      }),
+  }),
+
   // Dashboard router
   dashboard: router({
     stats: protectedProcedure.query(async () => {

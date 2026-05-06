@@ -15,6 +15,7 @@ import Patients from "./pages/Patients";
 import Studies from "./pages/Studies";
 import Worklist from "./pages/Worklist";
 import Reports from "./pages/Reports";
+import Admin from "./pages/Admin";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -30,6 +31,7 @@ function Router() {
       <Route path="/worklist" component={Worklist} />
       <Route path="/reports" component={Reports} />
       <Route path="/viewer" component={Viewer} />
+      <Route path="/admin" component={Admin} />
       <Route path="/login" component={Login} />
       <Route path="/upload/:token" component={GuestUpload} />
       <Route path={"/404"} component={NotFound} />

@@ -264,6 +264,18 @@ export async function updateReport(id: number, data: Partial<InsertReport>) {
   await db.update(reports).set(data).where(eq(reports.id, id));
 }
 
+export async function getAllUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(users).orderBy(users.name);
+}
+
+export async function updateUserRole(id: number, role: "admin" | "doctor" | "patient") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(users).set({ role }).where(eq(users.id, id));
+}
+
 // Dashboard statistics
 export async function getDashboardStats() {
   const db = await getDb();
