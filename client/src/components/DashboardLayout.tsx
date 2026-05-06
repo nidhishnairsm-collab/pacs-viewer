@@ -19,7 +19,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { APP_LOGO, APP_TITLE, getLoginUrl } from "@/const";
+import { APP_TITLE, getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import { ClipboardList, FileText, FlaskConical, LayoutDashboard, LogOut, PanelLeft, ScanLine, ShieldCheck, Users } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -27,6 +27,19 @@ import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
+
+function PacsLogo({ className = "h-8 w-8" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+      <rect width="32" height="32" rx="7" fill="#2563eb" />
+      <line x1="5" y1="10" x2="27" y2="10" stroke="white" strokeOpacity="0.35" strokeWidth="1" strokeLinecap="round" />
+      <line x1="5" y1="16" x2="27" y2="16" stroke="white" strokeOpacity="0.55" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="5" y1="22" x2="27" y2="22" stroke="white" strokeOpacity="0.35" strokeWidth="1" strokeLinecap="round" />
+      <rect x="14" y="8" width="4" height="16" rx="1.5" fill="white" />
+      <rect x="8" y="14" width="16" height="4" rx="1.5" fill="white" />
+    </svg>
+  );
+}
 
 type Role = "admin" | "doctor" | "patient";
 
@@ -75,11 +88,7 @@ export default function DashboardLayout({
           <div className="flex flex-col items-center gap-6">
             <div className="relative group">
               <div className="relative">
-                <img
-                  src={APP_LOGO}
-                  alt={APP_TITLE}
-                  className="h-20 w-20 rounded-xl object-cover shadow"
-                />
+                <PacsLogo className="h-20 w-20" />
               </div>
             </div>
             <div className="text-center space-y-2">
@@ -187,11 +196,7 @@ function DashboardLayoutContent({
             <div className="flex items-center gap-3 pl-2 group-data-[collapsible=icon]:px-0 transition-all w-full">
               {isCollapsed ? (
                 <div className="relative h-8 w-8 shrink-0 group">
-                  <img
-                    src={APP_LOGO}
-                    className="h-8 w-8 rounded-md object-cover ring-1 ring-border"
-                    alt="Logo"
-                  />
+                  <PacsLogo className="h-8 w-8 rounded-md" />
                   <button
                     onClick={toggleSidebar}
                     className="absolute inset-0 flex items-center justify-center bg-accent rounded-md ring-1 ring-border opacity-0 group-hover:opacity-100 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -202,11 +207,7 @@ function DashboardLayoutContent({
               ) : (
                 <>
                   <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={APP_LOGO}
-                      className="h-8 w-8 rounded-md object-cover ring-1 ring-border shrink-0"
-                      alt="Logo"
-                    />
+                    <PacsLogo className="h-8 w-8 rounded-md shrink-0" />
                     <span className="font-semibold tracking-tight truncate">
                       {APP_TITLE}
                     </span>
@@ -227,12 +228,15 @@ function DashboardLayoutContent({
               {menuItems.map(item => {
                 const isActive = item.path === "/" ? location === "/" : location.startsWith(item.path);
                 return (
-                  <SidebarMenuItem key={item.path}>
+                  <SidebarMenuItem key={item.path} className="relative">
+                    {isActive && (
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 bg-primary rounded-r-full" />
+                    )}
                     <SidebarMenuButton
                       isActive={isActive}
                       onClick={() => setLocation(item.path)}
                       tooltip={item.label}
-                      className={`h-10 transition-all font-normal`}
+                      className="h-10 transition-all font-normal"
                     >
                       <item.icon
                         className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
