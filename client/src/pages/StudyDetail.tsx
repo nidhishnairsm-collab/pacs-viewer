@@ -1,9 +1,13 @@
+import { useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye } from "lucide-react";
 import { EnhancedDicomViewer } from "@/components/EnhancedDicomViewer";
 
@@ -11,6 +15,11 @@ export default function StudyDetail() {
   const [, params] = useRoute("/studies/:id");
   const [, setLocation] = useLocation();
   const studyId = params?.id ? parseInt(params.id) : null;
+
+  const [findings, setFindings] = useState("");
+  const [impression, setImpression] = useState("");
+  const [recommendations, setRecommendations] = useState("");
+  const [editingReportId, setEditingReportId] = useState<number | null>(null);
 
   const { data: studyData, isLoading } = trpc.studies.getById.useQuery(
     { id: studyId! },
@@ -24,6 +33,43 @@ export default function StudyDetail() {
     { studyId: studyId! },
     { enabled: !!studyId }
   );
+
+  const { data: existingReports, refetch: refetchReports } = trpc.reports.getByStudyId.useQuery(
+    { studyId: studyId! },
+    { enabled: !!studyId }
+  );
+
+  const createReport = trpc.reports.create.useMutation({
+    onSuccess: () => { toast.success("Report saved"); refetchReports(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const updateReport = trpc.reports.update.useMutation({
+    onSuccess: () => { toast.success("Report updated"); refetchReports(); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  useEffect(() => {
+    if (!existingReports) return;
+    const draft = existingReports.find(r => r.status === "draft");
+    if (draft && findings === "") {
+      setFindings(draft.findings);
+      setImpression(draft.impression);
+      setRecommendations(draft.recommendations ?? "");
+      setEditingReportId(draft.id);
+    }
+  }, [existingReports]);
+
+  const handleSaveReport = (status: "draft" | "final") => {
+    if (!findings.trim() || !impression.trim()) {
+      toast.error("Findings and Impression are required");
+      return;
+    }
+    if (editingReportId) {
+      updateReport.mutate({ id: editingReportId, findings, impression, recommendations: recommendations || undefined, status });
+    } else if (studyId) {
+      createReport.mutate({ studyId, findings, impression, recommendations: recommendations || undefined, status });
+    }
+  };
 
   const imageIds: string[] = instanceData && instanceData.length > 0
     ? instanceData.map(row => `wadouri:${row.instance.fileUrl}`)
@@ -229,34 +275,94 @@ export default function StudyDetail() {
           <TabsContent value="report" className="space-y-4">
             <Card className="bg-card border-border">
               <CardHeader>
-                <CardTitle className="text-foreground">Radiology Report</CardTitle>
-                <CardDescription>
-                  {study.status === "reported"
-                    ? "Report available"
-                    : "Report not yet available"}
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-foreground">Radiology Report</CardTitle>
+                  {existingReports && existingReports.length > 0 && (
+                    <Badge variant="outline" className="capitalize">
+                      {existingReports[0].status}
+                    </Badge>
+                  )}
+                </div>
               </CardHeader>
-              <CardContent>
-                {study.status === "reported" ? (
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="font-semibold text-foreground mb-2">Findings</h3>
-                      <p className="text-muted-foreground">
-                        Report content would be displayed here. In a production system, this
-                        would show the actual radiology report with findings, impressions, and
-                        recommendations.
-                      </p>
+              <CardContent className="space-y-6">
+                {existingReports?.filter(r => r.status !== "draft").map(report => (
+                  <div key={report.id} className="space-y-4 border border-border rounded-lg p-4">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="capitalize">{report.status}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(report.createdAt).toLocaleString()}
+                      </span>
                     </div>
+                    <div>
+                      <h4 className="text-sm font-semibold text-muted-foreground mb-1">Findings</h4>
+                      <p className="text-foreground whitespace-pre-wrap">{report.findings}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold text-muted-foreground mb-1">Impression</h4>
+                      <p className="text-foreground whitespace-pre-wrap">{report.impression}</p>
+                    </div>
+                    {report.recommendations && (
+                      <div>
+                        <h4 className="text-sm font-semibold text-muted-foreground mb-1">Recommendations</h4>
+                        <p className="text-foreground whitespace-pre-wrap">{report.recommendations}</p>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No report available yet</p>
-                    <p className="text-sm mt-2">
-                      The study is currently {study.status.replace("_", " ")}
-                    </p>
+                ))}
+
+                <div className="space-y-4">
+                  <h3 className="font-semibold text-foreground">
+                    {editingReportId ? "Edit Draft Report" : "New Report"}
+                  </h3>
+                  <div className="space-y-1">
+                    <Label htmlFor="findings">Findings *</Label>
+                    <Textarea
+                      id="findings"
+                      rows={4}
+                      value={findings}
+                      onChange={e => setFindings(e.target.value)}
+                      placeholder="Describe imaging findings..."
+                      className="bg-background"
+                    />
                   </div>
-                )}
+                  <div className="space-y-1">
+                    <Label htmlFor="impression">Impression *</Label>
+                    <Textarea
+                      id="impression"
+                      rows={3}
+                      value={impression}
+                      onChange={e => setImpression(e.target.value)}
+                      placeholder="Clinical impression..."
+                      className="bg-background"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="recommendations">Recommendations</Label>
+                    <Textarea
+                      id="recommendations"
+                      rows={2}
+                      value={recommendations}
+                      onChange={e => setRecommendations(e.target.value)}
+                      placeholder="Optional follow-up recommendations..."
+                      className="bg-background"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => handleSaveReport("draft")}
+                      disabled={createReport.isPending || updateReport.isPending}
+                    >
+                      Save Draft
+                    </Button>
+                    <Button
+                      onClick={() => handleSaveReport("final")}
+                      disabled={createReport.isPending || updateReport.isPending}
+                    >
+                      Finalize Report
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

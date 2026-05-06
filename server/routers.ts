@@ -248,6 +248,36 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return await db.getReportsByStudyId(input.studyId);
       }),
+
+    list: protectedProcedure.query(async () => {
+      return await db.getAllReports();
+    }),
+
+    create: protectedProcedure
+      .input(z.object({
+        studyId: z.number(),
+        findings: z.string().min(1),
+        impression: z.string().min(1),
+        recommendations: z.string().optional(),
+        status: z.enum(["draft", "final", "amended"]).default("draft"),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        return await db.createReport({ ...input, reportedBy: ctx.user.id });
+      }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        findings: z.string().optional(),
+        impression: z.string().optional(),
+        recommendations: z.string().optional(),
+        status: z.enum(["draft", "final", "amended"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await db.updateReport(id, data);
+        return { success: true };
+      }),
   }),
 });
 

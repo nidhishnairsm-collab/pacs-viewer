@@ -1,6 +1,6 @@
 import { eq, desc, and, like, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, patients, studies, series, instances, reports, InsertPatient, InsertStudy, InsertSeries, InsertInstance, doctorPatients, InsertDoctorPatient, studyAccess, InsertStudyAccess, uploadTokens, InsertUploadToken } from "../drizzle/schema";
+import { InsertUser, users, patients, studies, series, instances, reports, InsertPatient, InsertStudy, InsertSeries, InsertInstance, InsertReport, doctorPatients, InsertDoctorPatient, studyAccess, InsertStudyAccess, uploadTokens, InsertUploadToken } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -35,7 +35,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     };
     const updateSet: Record<string, unknown> = {};
 
-    const textFields = ["name", "email", "loginMethod"] as const;
+    const textFields = ["name", "email", "loginMethod", "passwordHash"] as const;
     type TextField = (typeof textFields)[number];
 
     const assignNullable = (field: TextField) => {
@@ -236,8 +236,32 @@ export async function createInstance(i: InsertInstance) {
 export async function getReportsByStudyId(studyId: number) {
   const db = await getDb();
   if (!db) return [];
-  
+
   return await db.select().from(reports).where(eq(reports.studyId, studyId)).orderBy(desc(reports.createdAt));
+}
+
+export async function getAllReports() {
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db
+    .select({ report: reports, study: studies, patient: patients })
+    .from(reports)
+    .leftJoin(studies, eq(reports.studyId, studies.id))
+    .leftJoin(patients, eq(studies.patientId, patients.id))
+    .orderBy(desc(reports.createdAt));
+}
+
+export async function createReport(report: InsertReport) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return await db.insert(reports).values(report);
+}
+
+export async function updateReport(id: number, data: Partial<InsertReport>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(reports).set(data).where(eq(reports.id, id));
 }
 
 // Dashboard statistics
