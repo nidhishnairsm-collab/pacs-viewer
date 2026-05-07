@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye } from "lucide-react";
+import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye, Maximize2 } from "lucide-react";
 import { EnhancedDicomViewer } from "@/components/EnhancedDicomViewer";
 
 export default function StudyDetail() {
@@ -187,10 +187,21 @@ export default function StudyDetail() {
           <TabsContent value="viewer" className="space-y-4">
             <Card className="bg-card border-border">
               <CardHeader>
-                <CardTitle className="text-foreground">DICOM Viewer</CardTitle>
-                <CardDescription>
-                  View and analyze medical images with advanced tools
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-foreground">DICOM Viewer</CardTitle>
+                    <CardDescription>
+                      View and analyze medical images with advanced tools
+                    </CardDescription>
+                  </div>
+                  <Button
+                    onClick={() => setLocation(`/viewer/${studyId}`)}
+                    className="gap-2"
+                  >
+                    <Maximize2 className="w-4 h-4" />
+                    Open Advanced Viewer
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <EnhancedDicomViewer imageIds={imageIds} inline />

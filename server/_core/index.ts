@@ -14,6 +14,8 @@ import { serveStatic, setupVite } from "./vite";
 import { sdk } from "./sdk";
 import { storagePut } from "../storage";
 import * as db from "../db";
+import dicomwebRouter from "../dicomweb";
+import { ENV } from "./env";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -154,6 +156,29 @@ async function startServer() {
       console.error("[Upload] Error:", error);
       res.status(500).json({ error: "Upload failed" });
     }
+  });
+
+  // DICOMweb shim (QIDO-RS + WADO-RS) — required by OHIF
+  app.use("/api/dicomweb", dicomwebRouter);
+
+  // OHIF Viewer v3 static site (built by scripts/build-ohif.sh)
+  // Must be before the Vite/serveStatic catch-all so OHIF routes aren't swallowed.
+  const ohifDir = path.join(process.cwd(), ENV.ohifStaticDir);
+
+  // Serve app-config.js dynamically so config changes (bridge extension, data
+  // source URLs) take effect immediately without rebuilding OHIF.
+  app.get("/ohif/app-config.js", (_req, res) => {
+    res.setHeader("Content-Type", "application/javascript");
+    res.setHeader("Cache-Control", "no-cache, no-store");
+    res.sendFile(path.join(process.cwd(), "scripts", "ohif-config.js"));
+  });
+
+  app.use("/ohif", express.static(ohifDir));
+  // SPA fallback: any /ohif/* path not matching a real file serves OHIF's index.html
+  app.get("/ohif/*", (_req, res) => {
+    res.sendFile(path.join(ohifDir, "index.html"), err => {
+      if (err) res.status(503).send("OHIF not built yet — run: bash scripts/build-ohif.sh");
+    });
   });
 
   // tRPC API

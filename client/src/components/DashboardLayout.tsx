@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { APP_TITLE, getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { ClipboardList, FileText, FlaskConical, LayoutDashboard, LogOut, PanelLeft, ScanLine, ShieldCheck, Users } from "lucide-react";
+import { ClipboardList, FileText, FlaskConical, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Users } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -46,10 +46,9 @@ type Role = "admin" | "doctor" | "patient";
 const ALL_MENU_ITEMS = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/",         roles: ["admin", "doctor", "patient"] as Role[] },
   { icon: Users,           label: "Patients",  path: "/patients", roles: ["admin", "doctor"] as Role[] },
-  { icon: FlaskConical,    label: "Studies",   path: "/studies",  roles: ["admin", "doctor"] as Role[] },
+  { icon: FlaskConical,    label: "Studies",   path: "/studies",  roles: ["admin", "doctor", "patient"] as Role[] },
   { icon: ClipboardList,   label: "Worklist",  path: "/worklist", roles: ["doctor"] as Role[] },
   { icon: FileText,        label: "Reports",   path: "/reports",  roles: ["admin", "doctor"] as Role[] },
-  { icon: ScanLine,        label: "Viewer",    path: "/viewer",   roles: ["admin", "doctor", "patient"] as Role[] },
   { icon: ShieldCheck,     label: "Admin",     path: "/admin",    roles: ["admin"] as Role[] },
 ];
 

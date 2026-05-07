@@ -9,13 +9,13 @@ import Login from "@/pages/Login";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Viewer from "./pages/Viewer";
 import Dashboard from "./pages/Dashboard";
 import Patients from "./pages/Patients";
 import Studies from "./pages/Studies";
 import Worklist from "./pages/Worklist";
 import Reports from "./pages/Reports";
 import Admin from "./pages/Admin";
+import OHIFViewer from "./pages/OHIFViewer";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -28,9 +28,9 @@ function Router() {
       <Route path="/patients/:id" component={PatientDetail} />
       <Route path="/studies" component={Studies} />
       <Route path="/studies/:id" component={StudyDetail} />
+      <Route path="/viewer/:id" component={OHIFViewer} />
       <Route path="/worklist" component={Worklist} />
       <Route path="/reports" component={Reports} />
-      <Route path="/viewer" component={Viewer} />
       <Route path="/admin" component={Admin} />
       <Route path="/login" component={Login} />
       <Route path="/upload/:token" component={GuestUpload} />

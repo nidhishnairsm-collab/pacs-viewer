@@ -197,7 +197,7 @@ export default function Studies() {
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Link href={`/studies/${item.study.id}`}>
+                          <Link href={`/viewer/${item.study.id}`}>
                             <Button variant="ghost" size="sm">
                               <Eye className="h-4 w-4 mr-1" />
                               View
