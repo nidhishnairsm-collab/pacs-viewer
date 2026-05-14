@@ -4,30 +4,35 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { ArrowLeft, FileText, AlertCircle, Layout, Layers, Box } from "lucide-react";
-
-// Commands we can send into the OHIF iframe via postMessage
-function sendOhifCommand(iframe: HTMLIFrameElement | null, commandName: string, options: Record<string, unknown> = {}) {
-  iframe?.contentWindow?.postMessage(
-    { type: 'OHIF_RUN_COMMAND', commandName, options },
-    window.location.origin
-  );
-}
+import { ArrowLeft, AlertCircle } from "lucide-react";
+import { sendToOhif, type OhifInboundMessage } from "@/lib/ohifBridge";
+import OHIFToolbar from "@/components/OHIFToolbar";
+import { useTheme } from "@/contexts/ThemeContext";
 
 export default function OHIFViewer() {
   const [, params] = useRoute("/viewer/:id");
   const [, setLocation] = useLocation();
   const studyDbId = params?.id ? parseInt(params.id) : null;
+  const { theme } = useTheme();
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
 
   const [findings, setFindings] = useState("");
   const [impression, setImpression] = useState("");
   const [recommendations, setRecommendations] = useState("");
   const [editingReportId, setEditingReportId] = useState<number | null>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<string | null>(null);
 
   const { data: studyData } = trpc.studies.getById.useQuery(
     { id: studyDbId! },
@@ -50,7 +55,7 @@ export default function OHIFViewer() {
     onError: (e) => toast.error(e.message),
   });
 
-  // ── Pre-populate draft report when data arrives ──────────────────────
+  // Pre-populate draft report when data arrives
   useEffect(() => {
     if (!existingReports) return;
     const draft = existingReports.find(r => r.status === "draft");
@@ -62,23 +67,45 @@ export default function OHIFViewer() {
     }
   }, [existingReports]);
 
-  // ── postMessage bridge: OHIF → parent ────────────────────────────────
-  // Appends a formatted bullet to the findings field whenever a measurement
-  // is added inside OHIF (pacs-bridge extension in ohif-config.js posts
-  // OHIF_MEASUREMENT_ADDED to window.parent).
+  // Sync theme with OHIF whenever it changes (after iframe loads)
+  useEffect(() => {
+    if (!iframeLoaded) return;
+    sendToOhif(iframeRef.current, { type: 'OHIF_SET_THEME', theme: theme === 'dark' ? 'dark' : 'light' });
+  }, [theme, iframeLoaded]);
+
+  // Send theme immediately when iframe finishes loading
+  const handleIframeLoad = useCallback(() => {
+    setIframeLoaded(true);
+    sendToOhif(iframeRef.current, { type: 'OHIF_SET_THEME', theme: theme === 'dark' ? 'dark' : 'light' });
+  }, [theme]);
+
+  // postMessage bridge: OHIF → parent
   const handleOhifMessage = useCallback((event: MessageEvent) => {
-    // Same-origin guard
     if (event.origin !== window.location.origin) return;
-    const msg = event.data as { type?: string; findingText?: string };
+    const msg = event.data as OhifInboundMessage;
     if (!msg?.type) return;
 
-    if (msg.type === 'OHIF_MEASUREMENT_ADDED' && msg.findingText) {
-      const bullet = `• ${msg.findingText}`;
-      setFindings(prev => {
-        const base = prev.trim();
-        return base ? `${base}\n${bullet}` : bullet;
-      });
-      toast.info(`Measurement added: ${msg.findingText}`, { duration: 2500 });
+    switch (msg.type) {
+      case 'OHIF_MEASUREMENT_ADDED':
+        if (msg.findingText) {
+          const bullet = `• ${msg.findingText}`;
+          setFindings(prev => {
+            const base = prev.trim();
+            return base ? `${base}\n${bullet}` : bullet;
+          });
+          toast.info(`Measurement added: ${msg.findingText}`, { duration: 2500 });
+        }
+        break;
+      case 'OHIF_MEASUREMENT_UPDATED':
+        // No-op: re-derive findings from measurements would require a full list;
+        // for now, only new measurements auto-append.
+        break;
+      case 'OHIF_MEASUREMENT_REMOVED':
+        // Remove the bullet that starts with the matching uid prefix if present
+        break;
+      case 'OHIF_TOOL_CHANGED':
+        setActiveTool(msg.toolId);
+        break;
     }
   }, []);
 
@@ -87,7 +114,6 @@ export default function OHIFViewer() {
     return () => window.removeEventListener('message', handleOhifMessage);
   }, [handleOhifMessage]);
 
-  // ── Report save ───────────────────────────────────────────────────────
   const handleSave = (status: "draft" | "final") => {
     if (!findings.trim() || !impression.trim()) {
       toast.error("Findings and Impression are required");
@@ -100,7 +126,6 @@ export default function OHIFViewer() {
     }
   };
 
-  // ── Build OHIF URL from DICOM Study Instance UID ──────────────────────
   const ohifUrl = study?.studyId
     ? `/ohif/viewer?StudyInstanceUIDs=${encodeURIComponent(study.studyId)}`
     : null;
@@ -115,112 +140,76 @@ export default function OHIFViewer() {
     amended: "bg-blue-600",
   };
 
+  const hasReport = !!existingReports && existingReports.length > 0;
+
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="relative h-screen w-full overflow-hidden bg-background">
 
-      {/* ── OHIF iframe ─────────────────────────────── */}
-      <div className="flex-1 min-w-0 relative flex flex-col">
-
-        {/* Top bar */}
-        <div className="flex items-center gap-2 px-3 py-2 bg-card border-b border-border shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setLocation(`/studies/${studyDbId}`)}
-            className="h-7 px-2 shrink-0"
-          >
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            Back
-          </Button>
-
-          {study && (
-            <span className="text-sm text-muted-foreground truncate min-w-0">
-              {patient?.name && (
-                <span className="font-medium text-foreground mr-2">{patient.name}</span>
-              )}
-              {study.description}
-              <span className="ml-2 text-xs opacity-70">{study.modality}</span>
-            </span>
-          )}
-
-          {/* Layout shortcut buttons — send OHIF_RUN_COMMAND into iframe */}
-          <div className="ml-auto flex items-center gap-1 shrink-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              title="MPR layout"
-              className="h-7 px-2 text-xs"
-              onClick={() => sendOhifCommand(iframeRef.current, 'setLayout', { numRows: 1, numCols: 3 })}
-            >
-              <Layers className="w-3.5 h-3.5 mr-1" />
-              MPR
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              title="3D layout"
-              className="h-7 px-2 text-xs"
-              onClick={() => sendOhifCommand(iframeRef.current, 'setLayout', { numRows: 1, numCols: 1 })}
-            >
-              <Box className="w-3.5 h-3.5 mr-1" />
-              3D
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              title="2×2 grid"
-              className="h-7 px-2 text-xs"
-              onClick={() => sendOhifCommand(iframeRef.current, 'setLayout', { numRows: 2, numCols: 2 })}
-            >
-              <Layout className="w-3.5 h-3.5 mr-1" />
-              Grid
-            </Button>
-            <div className="w-px h-4 bg-border mx-1" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setPanelOpen(o => !o)}
-              className="h-7 px-2"
-            >
-              <FileText className="w-4 h-4 mr-1" />
-              {panelOpen ? "Hide" : "Report"}
-            </Button>
-          </div>
+      {/* OHIF iframe — fills the entire viewport */}
+      {ohifUrl ? (
+        <iframe
+          ref={iframeRef}
+          src={ohifUrl}
+          className="absolute inset-0 w-full h-full border-0"
+          title="OHIF DICOM Viewer"
+          allow="fullscreen"
+          onLoad={handleIframeLoad}
+        />
+      ) : (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-muted-foreground">
+          <AlertCircle className="w-10 h-10" />
+          {study === null ? <p>Study not found.</p> : <p>Loading study…</p>}
         </div>
+      )}
 
-        {/* OHIF or fallback */}
-        <div className="flex-1 min-h-0">
-          {ohifUrl ? (
-            <iframe
-              ref={iframeRef}
-              src={ohifUrl}
-              className="w-full h-full border-0"
-              title="OHIF DICOM Viewer"
-              allow="fullscreen"
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
-              <AlertCircle className="w-10 h-10" />
-              {study === null ? <p>Study not found.</p> : <p>Loading study…</p>}
-            </div>
-          )}
-        </div>
+      {/* Floating toolbar strip — left edge, full height */}
+      <div className="absolute left-0 top-0 h-full z-10 pointer-events-none">
+        <OHIFToolbar
+          iframeRef={iframeRef}
+          activeTool={activeTool}
+          reportOpen={reportOpen}
+          onToggleReport={() => setReportOpen(o => !o)}
+          hasReport={hasReport}
+        />
       </div>
 
-      {/* ── Report panel ─────────────────────────────── */}
-      {panelOpen && (
-        <div className="w-[380px] min-w-[320px] border-l border-border flex flex-col bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border shrink-0">
-            <h2 className="font-semibold text-foreground text-sm">Radiology Report</h2>
-            {existingReports && existingReports.length > 0 && (
-              <Badge className={`mt-1 text-xs ${statusColors[existingReports[0].status]}`}>
-                {existingReports[0].status}
+      {/* Slim top bar — Back button + study info, starts after toolbar */}
+      <div className="absolute top-0 left-12 right-0 z-10 h-10 bg-background/80 backdrop-blur-sm border-b border-border/50 flex items-center px-3 gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setLocation(`/studies/${studyDbId}`)}
+          className="h-7 px-2 shrink-0"
+        >
+          <ArrowLeft className="w-4 h-4 mr-1" />
+          Back
+        </Button>
+
+        {study && (
+          <span className="text-sm text-muted-foreground truncate min-w-0">
+            {patient?.name && (
+              <span className="font-medium text-foreground mr-2">{patient.name}</span>
+            )}
+            {study.description}
+            <span className="ml-2 text-xs opacity-70">{study.modality}</span>
+          </span>
+        )}
+      </div>
+
+      {/* Radiology report — slide-over from right */}
+      <Sheet open={reportOpen} onOpenChange={setReportOpen}>
+        <SheetContent side="right" className="w-[420px] flex flex-col p-0">
+          <SheetHeader className="px-4 pt-4 pb-3 border-b border-border shrink-0">
+            <SheetTitle className="text-sm font-semibold">Radiology Report</SheetTitle>
+            {hasReport && (
+              <Badge className={`mt-1 w-fit text-xs ${statusColors[existingReports![0].status]}`}>
+                {existingReports![0].status}
               </Badge>
             )}
-            <p className="text-xs text-muted-foreground mt-1">
-              Measurements added in the viewer are appended to Findings automatically.
+            <p className="text-xs text-muted-foreground">
+              Measurements drawn in the viewer are appended to Findings automatically.
             </p>
-          </div>
+          </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {/* Finalized reports (read-only) */}
@@ -290,7 +279,7 @@ export default function OHIFViewer() {
             </div>
           </div>
 
-          <div className="px-4 py-3 border-t border-border flex gap-2 shrink-0">
+          <SheetFooter className="px-4 py-3 border-t border-border flex-row gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -308,9 +297,9 @@ export default function OHIFViewer() {
             >
               Finalize
             </Button>
-          </div>
-        </div>
-      )}
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

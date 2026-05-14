@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FileText, Eye, Upload, Loader2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -24,6 +25,7 @@ export default function Studies() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [patientName, setPatientName] = useState("");
+  const [priority, setPriority] = useState<"routine" | "urgent" | "stat">("routine");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -34,6 +36,7 @@ export default function Studies() {
     try {
       const formData = new FormData();
       formData.append("patientName", patientName.trim());
+      formData.append("priority", priority);
       selectedFiles.forEach(f => formData.append("files", f));
       const res = await fetch("/api/upload-dicom", { method: "POST", body: formData });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || "Upload failed"); }
@@ -41,6 +44,7 @@ export default function Studies() {
       await refetch();
       setUploadOpen(false);
       setPatientName("");
+      setPriority("routine");
       setSelectedFiles([]);
       toast.success("Study uploaded successfully");
       if (data.studyId) setLocation(`/studies/${data.studyId}`);
@@ -103,6 +107,19 @@ export default function Studies() {
                   value={patientName}
                   onChange={e => setPatientName(e.target.value)}
                 />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="priority">Priority</Label>
+                <Select value={priority} onValueChange={v => setPriority(v as typeof priority)}>
+                  <SelectTrigger id="priority">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="routine">Routine</SelectItem>
+                    <SelectItem value="urgent">Urgent</SelectItem>
+                    <SelectItem value="stat">STAT</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
                 <Label>DICOM Files (.dcm)</Label>

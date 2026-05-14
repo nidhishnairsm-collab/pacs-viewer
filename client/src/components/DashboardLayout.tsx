@@ -47,7 +47,7 @@ const ALL_MENU_ITEMS = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/",         roles: ["admin", "doctor", "patient"] as Role[] },
   { icon: Users,           label: "Patients",  path: "/patients", roles: ["admin", "doctor"] as Role[] },
   { icon: FlaskConical,    label: "Studies",   path: "/studies",  roles: ["admin", "doctor", "patient"] as Role[] },
-  { icon: ClipboardList,   label: "Worklist",  path: "/worklist", roles: ["doctor"] as Role[] },
+  { icon: ClipboardList,   label: "Worklist",  path: "/worklist", roles: ["admin", "doctor"] as Role[] },
   { icon: FileText,        label: "Reports",   path: "/reports",  roles: ["admin", "doctor"] as Role[] },
   { icon: ShieldCheck,     label: "Admin",     path: "/admin",    roles: ["admin"] as Role[] },
 ];

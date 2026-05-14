@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ClipboardList, Eye } from "lucide-react";
+import { ClipboardList, Eye, AlertTriangle } from "lucide-react";
 import { Link } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { cn } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -16,6 +17,39 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+// ── SLA thresholds (ms) ───────────────────────────────────────────────────
+const SLA = {
+  stat:    30 * 60 * 1000,        // 30 minutes
+  urgent:  4  * 60 * 60 * 1000,   // 4 hours
+  routine: 24 * 60 * 60 * 1000,   // 24 hours
+} as const;
+
+function isUnread(status: string) {
+  return status === 'pending' || status === 'in_progress';
+}
+
+function elapsedMs(createdAt: Date | string, now: number) {
+  return now - new Date(createdAt).getTime();
+}
+
+function getSlaStatus(priority: string, status: string, createdAt: Date | string, now: number) {
+  if (!isUnread(status)) return null;
+  const elapsed = elapsedMs(createdAt, now);
+  const threshold = SLA[priority as keyof typeof SLA] ?? SLA.routine;
+  if (elapsed > threshold) return 'overdue';
+  if (elapsed > threshold * 0.75) return 'warning';
+  return 'ok';
+}
+
+function formatElapsed(ms: number) {
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+// ── Badge helpers ─────────────────────────────────────────────────────────
 const getStatusColor = (status: string) => {
   switch (status) {
     case "completed":   return "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300";
@@ -41,6 +75,16 @@ const getAccessColor = (level: string) => {
   }
 };
 
+// ── Row-level SLA highlight ────────────────────────────────────────────────
+function getRowHighlight(priority: string, slaStatus: string | null) {
+  if (slaStatus !== 'overdue') return '';
+  switch (priority) {
+    case 'stat':    return 'border-l-4 border-red-500 bg-red-500/5';
+    case 'urgent':  return 'border-l-4 border-orange-500 bg-orange-500/5';
+    default:        return 'border-l-4 border-yellow-500 bg-yellow-500/5';
+  }
+}
+
 export default function Worklist() {
   const { user } = useAuth();
   const isDoctor = user?.role === "doctor";
@@ -54,6 +98,13 @@ export default function Worklist() {
 
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
+
+  // Live clock — recalculates SLA every minute
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   if (user?.role === "patient") {
     return (
@@ -70,7 +121,16 @@ export default function Worklist() {
 
   const isLoading = isDoctor ? sharedLoading : allLoading;
 
-  type Row = { id: number; patient: string; modality: string; studyDate: Date; priority: string; status: string; accessLevel?: string };
+  type Row = {
+    id: number;
+    patient: string;
+    modality: string;
+    studyDate: Date;
+    createdAt: Date;
+    priority: string;
+    status: string;
+    accessLevel?: string;
+  };
 
   const rows: Row[] = isDoctor
     ? (sharedStudies ?? []).map(item => ({
@@ -78,6 +138,7 @@ export default function Worklist() {
         patient: item.patient?.name ?? "Unknown",
         modality: item.study?.modality ?? "",
         studyDate: item.study?.studyDate ? new Date(item.study.studyDate) : new Date(),
+        createdAt: item.study?.createdAt ? new Date(item.study.createdAt) : new Date(),
         priority: item.study?.priority ?? "routine",
         status: item.study?.status ?? "pending",
         accessLevel: item.access?.accessLevel ?? "view",
@@ -89,6 +150,7 @@ export default function Worklist() {
           patient: item.patient?.name ?? "Unknown",
           modality: item.study.modality,
           studyDate: new Date(item.study.studyDate),
+          createdAt: new Date(item.study.createdAt),
           priority: item.study.priority,
           status: item.study.status,
         }));
@@ -96,6 +158,11 @@ export default function Worklist() {
   const filtered = rows.filter(r =>
     (statusFilter === "all" || r.status === statusFilter) &&
     (priorityFilter === "all" || r.priority === priorityFilter)
+  );
+
+  // STAT studies that have breached SLA — drives the top alert banner
+  const overdueStats = rows.filter(r =>
+    r.priority === 'stat' && getSlaStatus(r.priority, r.status, r.createdAt, now) === 'overdue'
   );
 
   return (
@@ -107,6 +174,18 @@ export default function Worklist() {
             {isDoctor ? "Studies shared with you for review" : "Pending and in-progress studies"}
           </p>
         </div>
+
+        {/* SLA breach alert banner */}
+        {overdueStats.length > 0 && (
+          <div className="flex items-center gap-3 px-4 py-3 bg-red-600/10 border border-red-600/30 rounded-lg text-sm text-red-600 dark:text-red-400">
+            <AlertTriangle className="w-4 h-4 shrink-0 animate-pulse" />
+            <span>
+              <strong>{overdueStats.length} STAT {overdueStats.length === 1 ? 'study has' : 'studies have'}</strong>{' '}
+              exceeded the 30-minute read SLA —{' '}
+              {overdueStats.map(s => s.patient).join(', ')}.
+            </span>
+          </div>
+        )}
 
         <div className="flex gap-3">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -161,42 +240,69 @@ export default function Worklist() {
                       <TableHead>Priority</TableHead>
                       <TableHead>Status</TableHead>
                       {isDoctor && <TableHead>Access</TableHead>}
+                      <TableHead>Time Unread</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filtered.map(row => (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-medium">{row.patient}</TableCell>
-                        <TableCell>{row.studyDate.toLocaleDateString()}</TableCell>
-                        <TableCell><span className="font-mono text-sm">{row.modality}</span></TableCell>
-                        <TableCell>
-                          <span className={`text-xs px-2 py-1 rounded-full ${getPriorityColor(row.priority)}`}>
-                            {row.priority}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(row.status)}`}>
-                            {row.status.replace("_", " ")}
-                          </span>
-                        </TableCell>
-                        {isDoctor && (
+                    {filtered.map(row => {
+                      const slaStatus = getSlaStatus(row.priority, row.status, row.createdAt, now);
+                      const elapsed = elapsedMs(row.createdAt, now);
+                      return (
+                        <TableRow
+                          key={row.id}
+                          className={cn(getRowHighlight(row.priority, slaStatus))}
+                        >
+                          <TableCell className="font-medium">{row.patient}</TableCell>
+                          <TableCell>{row.studyDate.toLocaleDateString()}</TableCell>
+                          <TableCell><span className="font-mono text-sm">{row.modality}</span></TableCell>
                           <TableCell>
-                            <span className={`text-xs px-2 py-1 rounded-full ${getAccessColor(row.accessLevel ?? "view")}`}>
-                              {row.accessLevel}
+                            <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full ${getPriorityColor(row.priority)}`}>
+                              {row.priority}
+                              {slaStatus === 'overdue' && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                              )}
                             </span>
                           </TableCell>
-                        )}
-                        <TableCell className="text-right">
-                          <Link href={`/studies/${row.id}`}>
-                            <Button variant="ghost" size="sm">
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
-                            </Button>
-                          </Link>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          <TableCell>
+                            <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(row.status)}`}>
+                              {row.status.replace("_", " ")}
+                            </span>
+                          </TableCell>
+                          {isDoctor && (
+                            <TableCell>
+                              <span className={`text-xs px-2 py-1 rounded-full ${getAccessColor(row.accessLevel ?? "view")}`}>
+                                {row.accessLevel}
+                              </span>
+                            </TableCell>
+                          )}
+                          <TableCell>
+                            {isUnread(row.status) ? (
+                              <span className={cn(
+                                "text-xs font-mono",
+                                slaStatus === 'overdue' && row.priority === 'stat'   && "text-red-500 font-semibold",
+                                slaStatus === 'overdue' && row.priority === 'urgent' && "text-orange-500 font-semibold",
+                                slaStatus === 'overdue' && row.priority === 'routine'&& "text-yellow-600 font-semibold",
+                                slaStatus === 'warning' && "text-muted-foreground",
+                                slaStatus === 'ok'      && "text-muted-foreground",
+                              )}>
+                                {formatElapsed(elapsed)}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Link href={`/studies/${row.id}`}>
+                              <Button variant="ghost" size="sm">
+                                <Eye className="h-4 w-4 mr-1" />
+                                View
+                              </Button>
+                            </Link>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

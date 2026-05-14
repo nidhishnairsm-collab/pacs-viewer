@@ -301,44 +301,6 @@ export default function Dashboard() {
           </Card>
         </motion.div>
 
-        {/* Quick Actions */}
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.7, ease: "easeOut" }}
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-3">
-              <Link href="/patients/add">
-                <Button className="shadow-sm">
-                  <Users className="h-4 w-4 mr-2" />
-                  Add Patient
-                </Button>
-              </Link>
-              <Link href="/patients">
-                <Button variant="outline">
-                  <Users className="h-4 w-4 mr-2" />
-                  View Patients
-                </Button>
-              </Link>
-              <Link href="/studies">
-                <Button variant="outline">
-                  <FileText className="h-4 w-4 mr-2" />
-                  View Studies
-                </Button>
-              </Link>
-              <Link href="/viewer">
-                <Button variant="outline">
-                  <Activity className="h-4 w-4 mr-2" />
-                  DICOM Viewer
-                </Button>
-              </Link>
-            </CardContent>
-          </Card>
-        </motion.div>
       </div>
     </DashboardLayout>
   );

@@ -3,9 +3,10 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, Eye } from "lucide-react";
+import { FileText, Eye, Download } from "lucide-react";
 import { Link } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
+import { exportReportPdf } from "@/lib/reportPdf";
 import {
   Table,
   TableBody,
@@ -80,6 +81,7 @@ export default function Reports() {
                       <TableHead>Status</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
+                      <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -109,6 +111,16 @@ export default function Reports() {
                               View Study
                             </Button>
                           </Link>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => exportReportPdf({ patient: item.patient, study: item.study, report: item.report })}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            PDF
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}

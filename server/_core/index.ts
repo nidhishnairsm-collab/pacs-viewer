@@ -58,6 +58,8 @@ async function startServer() {
       if (!files || files.length === 0) { res.status(400).json({ error: "No files provided" }); return; }
 
       const patientName = (req.body.patientName as string)?.trim() || "Unknown Patient";
+      const priorityRaw = (req.body.priority as string) ?? "routine";
+      const priority = (["routine", "urgent", "stat"].includes(priorityRaw) ? priorityRaw : "routine") as "routine" | "urgent" | "stat";
 
       // Group files by Study Instance UID
       type FileEntry = { buffer: Buffer; sopUID: string; seriesUID: string; instanceNumber: number };
@@ -123,6 +125,7 @@ async function startServer() {
           numberOfSeries: studyEntry.series.size,
           numberOfInstances: totalInstances,
           uploadedBy: user.id,
+          priority,
         });
         const dbStudyId = Number((studyRecord as any)[0]?.insertId ?? (studyRecord as any).insertId);
         studyIds.push(dbStudyId);

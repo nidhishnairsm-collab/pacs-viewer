@@ -28,32 +28,57 @@ var pacsBridgeExtension = {
   id: 'pacs-bridge',
 
   // preRegistration runs very early — services are not yet available here.
-  // We only set up the parent-→-OHIF command listener at this stage so it
-  // is ready before the mode starts.
+  // Inject CSS to hide OHIF chrome and set up the parent→OHIF command listener.
   preRegistration: function preRegistration() {
     if (window.parent === window) return;
     window._pacsBridgePendingCmds = [];
+
+    // Hide OHIF's AppBar and side-panel tabs so the iframe looks like a bare canvas.
+    // !important beats OHIF's inline styles (e.g. height:calc(100vh - 52px)).
+    var style = document.createElement('style');
+    style.id = 'pacs-bridge-hide-chrome';
+    style.textContent = [
+      '.bg-popover.z-20.border-background { display:none!important; }',
+      '[data-cy="return-to-work-list"] { display:none!important; }',
+      'div[style*="calc(100vh - 52px"] { height:100vh!important; }',
+      '[data-cy="side-panel-header-left"] { display:none!important; }',
+      '[data-cy="side-panel-header-right"] { display:none!important; }',
+      // Belt-and-suspenders: hide investigational use banner (primary: config option: "never")
+      '[data-cy="confirm-and-hide-button"] { display:none!important; }',
+      '.fixed.bottom-2.z-50 { display:none!important; }',
+    ].join('\n');
+    document.head.appendChild(style);
 
     window.addEventListener('message', function(event) {
       // Same-origin guard
       try { if (new URL(event.origin).origin !== window.location.origin) return; } catch (_) {}
       var msg = event.data;
       if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('OHIF_') !== 0) return;
-      // Queue until onModeEnter wires up the commandsManager
+      // Handle theme sync immediately (no commandsManager needed)
+      if (msg.type === 'OHIF_SET_THEME') {
+        if (msg.theme === 'dark') document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+        return;
+      }
+      // Queue tool/layout commands until onModeEnter wires up the commandsManager
       window._pacsBridgePendingCmds.push(msg);
     });
   },
 
   // onModeEnter runs after all services are initialised — safe to subscribe
-  // to MeasurementService here.
+  // to MeasurementService and toolbarService here.
   onModeEnter: function onModeEnter(ctx) {
     if (window.parent === window) return;
     var servicesManager = ctx.servicesManager;
     var commandsManager = ctx.commandsManager;
-    var measurementService = servicesManager && servicesManager.services && servicesManager.services.measurementService;
+    var services = servicesManager && servicesManager.services;
+    var measurementService = services && services.measurementService;
+    var toolbarService = services && services.toolbarService;
+
+    window._pacsBridgeSubs = [];
 
     if (measurementService) {
-      var sub = measurementService.subscribe(
+      var subAdded = measurementService.subscribe(
         measurementService.EVENTS.MEASUREMENT_ADDED,
         function(event) {
           var m = (event && event.measurement) || event;
@@ -64,7 +89,41 @@ var pacsBridgeExtension = {
           }, window.location.origin);
         }
       );
-      window._pacsBridgeMeasurementSub = sub;
+      var subUpdated = measurementService.subscribe(
+        measurementService.EVENTS.MEASUREMENT_UPDATED,
+        function(event) {
+          var m = (event && event.measurement) || event;
+          window.parent.postMessage({
+            type: 'OHIF_MEASUREMENT_UPDATED',
+            uid: m && m.uid,
+            findingText: buildFindingText(m),
+          }, window.location.origin);
+        }
+      );
+      var subRemoved = measurementService.subscribe(
+        measurementService.EVENTS.MEASUREMENT_REMOVED,
+        function(event) {
+          window.parent.postMessage({
+            type: 'OHIF_MEASUREMENT_REMOVED',
+            uid: event && event.uid,
+          }, window.location.origin);
+        }
+      );
+      window._pacsBridgeSubs.push(subAdded, subUpdated, subRemoved);
+    }
+
+    // Broadcast active tool changes back to the parent toolbar
+    if (toolbarService && toolbarService.EVENTS && toolbarService.EVENTS.TOOL_BAR_MODIFIED) {
+      var subToolbar = toolbarService.subscribe(
+        toolbarService.EVENTS.TOOL_BAR_MODIFIED,
+        function(state) {
+          var active = state && state.primary && state.primary.find(function(b) { return b.isActive; });
+          if (active) {
+            window.parent.postMessage({ type: 'OHIF_TOOL_CHANGED', toolId: active.id }, window.location.origin);
+          }
+        }
+      );
+      window._pacsBridgeSubs.push(subToolbar);
     }
 
     // Process any commands that arrived before mode was ready
@@ -78,16 +137,21 @@ var pacsBridgeExtension = {
       try { if (new URL(event.origin).origin !== window.location.origin) return; } catch (_) {}
       var msg = event.data;
       if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('OHIF_') !== 0) return;
+      if (msg.type === 'OHIF_SET_THEME') {
+        if (msg.theme === 'dark') document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+        return;
+      }
       handleCommand(msg, commandsManager);
     };
     window.addEventListener('message', window._pacsBridgeLiveListener);
   },
 
   onModeExit: function onModeExit() {
-    if (window._pacsBridgeMeasurementSub) {
-      window._pacsBridgeMeasurementSub.unsubscribe();
-      window._pacsBridgeMeasurementSub = null;
-    }
+    (window._pacsBridgeSubs || []).forEach(function(sub) {
+      if (sub && typeof sub.unsubscribe === 'function') sub.unsubscribe();
+    });
+    window._pacsBridgeSubs = [];
     if (window._pacsBridgeLiveListener) {
       window.removeEventListener('message', window._pacsBridgeLiveListener);
       window._pacsBridgeLiveListener = null;
@@ -98,8 +162,34 @@ var pacsBridgeExtension = {
 function handleCommand(msg, commandsManager) {
   if (!commandsManager) return;
   try {
-    if (msg.type === 'OHIF_RUN_COMMAND' && msg.commandName) {
-      commandsManager.runCommand(msg.commandName, msg.options || {});
+    switch (msg.type) {
+      case 'OHIF_RUN_COMMAND':
+        if (msg.commandName) commandsManager.runCommand(msg.commandName, msg.options || {});
+        break;
+      case 'OHIF_SET_TOOL':
+        if (msg.toolName) commandsManager.runCommand('setToolActiveToolbar', { toolName: msg.toolName, toolGroupIds: [] });
+        break;
+      case 'OHIF_SET_LAYOUT':
+        commandsManager.runCommand('setViewportGridLayout', { numRows: msg.numRows || 1, numCols: msg.numCols || 1 });
+        break;
+      case 'OHIF_TOGGLE_CINE':
+        commandsManager.runCommand('toggleCine', {});
+        break;
+      case 'OHIF_RESET_VIEWPORT':
+        commandsManager.runCommand('resetViewport', {});
+        break;
+      case 'OHIF_FLIP_H':
+        commandsManager.runCommand('flipViewportHorizontal', {});
+        break;
+      case 'OHIF_FLIP_V':
+        commandsManager.runCommand('flipViewportVertical', {});
+        break;
+      case 'OHIF_ROTATE_CW':
+        commandsManager.runCommand('rotateViewportCW', {});
+        break;
+      case 'OHIF_INVERT':
+        commandsManager.runCommand('invertViewport', {});
+        break;
     }
   } catch (e) {
     console.warn('[PACS Bridge] command error:', e);
@@ -117,6 +207,7 @@ window.config = {
   omitQuotationForMultipartRequest: true,
   showWarningMessageForCrossOrigin: false,
   showCPUFallbackMessage: false,
+  investigationalUseDialog: { option: 'never' },
   strictZSpacingForVolumeViewport: false,
   groupEnabledModesFirst: true,
   maxNumRequests: {
