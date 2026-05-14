@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye, Maximize2 } from "lucide-react";
+import { exportReportPdf } from "@/lib/reportPdf";
 import { EnhancedDicomViewer } from "@/components/EnhancedDicomViewer";
 
 export default function StudyDetail() {
@@ -298,11 +299,21 @@ export default function StudyDetail() {
               <CardContent className="space-y-6">
                 {existingReports?.filter(r => r.status !== "draft").map(report => (
                   <div key={report.id} className="space-y-4 border border-border rounded-lg p-4">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="capitalize">{report.status}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(report.createdAt).toLocaleString()}
-                      </span>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="capitalize">{report.status}</Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(report.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => exportReportPdf({ patient: patient ?? null, study: study ?? null, report })}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Export PDF
+                      </Button>
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold text-muted-foreground mb-1">Findings</h4>
