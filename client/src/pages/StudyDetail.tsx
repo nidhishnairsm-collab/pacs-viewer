@@ -8,9 +8,107 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye, Maximize2 } from "lucide-react";
+import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye, Maximize2, Loader2 } from "lucide-react";
 import { exportReportPdf } from "@/lib/reportPdf";
 import { EnhancedDicomViewer } from "@/components/EnhancedDicomViewer";
+import dicomParser from "dicom-parser";
+
+const DICOM_TAG_NAMES: Record<string, string> = {
+  // Patient
+  x00100010: "Patient Name", x00100020: "Patient ID", x00100030: "Patient Birth Date",
+  x00100040: "Patient Sex", x00101000: "Other Patient IDs", x00101040: "Patient Telephone",
+  x00102160: "Ethnic Group", x00104000: "Patient Comments",
+  // Study
+  x00080020: "Study Date", x00080030: "Study Time", x00080050: "Accession Number",
+  x00080060: "Modality", x00080070: "Manufacturer", x00080080: "Institution Name",
+  x00080090: "Referring Physician", x00081030: "Study Description",
+  x00081040: "Institutional Department", x00081050: "Performing Physician",
+  x00081090: "Manufacturer Model", x00200010: "Study ID", x0020000d: "Study Instance UID",
+  // Series
+  x00080021: "Series Date", x00080031: "Series Time", x0008103e: "Series Description",
+  x00181030: "Protocol Name", x00180015: "Body Part Examined",
+  x00200011: "Series Number", x0020000e: "Series Instance UID",
+  // Instance
+  x00080016: "SOP Class UID", x00080018: "SOP Instance UID", x00200013: "Instance Number",
+  // Image
+  x00280010: "Rows", x00280011: "Columns", x00280030: "Pixel Spacing",
+  x00280100: "Bits Allocated", x00280101: "Bits Stored", x00280103: "Pixel Representation",
+  x00281050: "Window Center", x00281051: "Window Width",
+  // Acquisition
+  x00180050: "Slice Thickness", x00180080: "Repetition Time", x00180081: "Echo Time",
+  x00180087: "Magnetic Field Strength", x00180088: "Spacing Between Slices",
+  x00181020: "Software Version", x00185100: "Patient Position",
+  x00200032: "Image Position (Patient)", x00200037: "Image Orientation (Patient)",
+  x00201041: "Slice Location",
+};
+
+const TAG_GROUPS: Record<string, string[]> = {
+  "Patient": ["x00100010","x00100020","x00100030","x00100040","x00101000","x00101040","x00102160","x00104000"],
+  "Study": ["x00080020","x00080030","x00080050","x00080060","x00080070","x00080080","x00080090","x00081030","x00081040","x00081050","x00081090","x00200010","x0020000d"],
+  "Series": ["x00080021","x00080031","x0008103e","x00181030","x00180015","x00200011","x0020000e"],
+  "Instance / Image": ["x00080016","x00080018","x00200013","x00280010","x00280011","x00280030","x00280100","x00280101","x00280103","x00281050","x00281051"],
+  "Acquisition": ["x00180050","x00180080","x00180081","x00180087","x00180088","x00181020","x00185100","x00200032","x00200037","x00201041"],
+};
+
+function DicomTagsPanel({ fileUrl }: { fileUrl: string }) {
+  const [tags, setTags] = useState<Record<string, string> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(fileUrl)
+      .then(r => r.arrayBuffer())
+      .then(buf => {
+        if (cancelled) return;
+        const dataset = dicomParser.parseDicom(new Uint8Array(buf));
+        const extracted: Record<string, string> = {};
+        for (const tag of Object.keys(DICOM_TAG_NAMES)) {
+          try {
+            const val = dataset.string(tag as any);
+            if (val !== undefined && val.trim() !== "") extracted[tag] = val.trim();
+          } catch {}
+        }
+        setTags(extracted);
+      })
+      .catch(e => { if (!cancelled) setError(String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [fileUrl]);
+
+  if (loading) return <div className="flex items-center gap-2 text-muted-foreground py-8"><Loader2 className="h-4 w-4 animate-spin" />Loading DICOM metadata...</div>;
+  if (error) return <div className="text-destructive py-4">Failed to load DICOM file: {error}</div>;
+  if (!tags) return null;
+
+  return (
+    <div className="space-y-6">
+      {Object.entries(TAG_GROUPS).map(([groupName, groupTags]) => {
+        const rows = groupTags.filter(t => tags[t]);
+        if (rows.length === 0) return null;
+        return (
+          <div key={groupName}>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">{groupName}</h3>
+            <div className="rounded-md border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <tbody>
+                  {rows.map((tag, i) => (
+                    <tr key={tag} className={i % 2 === 0 ? "bg-muted/30" : ""}>
+                      <td className="px-3 py-2 text-muted-foreground w-48 font-medium">{DICOM_TAG_NAMES[tag]}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground w-28">({tag.slice(1,5).toUpperCase()},{tag.slice(5).toUpperCase()})</td>
+                      <td className="px-3 py-2 text-foreground break-all">{tags[tag]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function StudyDetail() {
   const [, params] = useRoute("/studies/:id");
@@ -179,6 +277,10 @@ export default function StudyDetail() {
               <FileText className="w-4 h-4 mr-2" />
               Study Info
             </TabsTrigger>
+            <TabsTrigger value="dicom-tags" className="data-[state=active]:bg-background">
+              <FileText className="w-4 h-4 mr-2" />
+              DICOM Tags
+            </TabsTrigger>
             <TabsTrigger value="report" className="data-[state=active]:bg-background">
               <FileText className="w-4 h-4 mr-2" />
               Report
@@ -237,6 +339,10 @@ export default function StudyDetail() {
                     </div>
                   </div>
                   <div>
+                    <div className="text-sm text-muted-foreground">Referring Physician</div>
+                    <div className="text-foreground font-medium">{study.referringPhysician || "N/A"}</div>
+                  </div>
+                  <div>
                     <div className="text-sm text-muted-foreground">Status</div>
                     <Badge className={statusColors[study.status]}>
                       {study.status.replace("_", " ").toUpperCase()}
@@ -282,6 +388,21 @@ export default function StudyDetail() {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          <TabsContent value="dicom-tags" className="space-y-4">
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <CardTitle className="text-foreground">DICOM File Header</CardTitle>
+                <CardDescription>All metadata tags extracted from the DICOM file</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {instanceData && instanceData.length > 0
+                  ? <DicomTagsPanel fileUrl={instanceData[0].instance.fileUrl} />
+                  : <p className="text-muted-foreground text-sm">No DICOM instances found for this study.</p>
+                }
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="report" className="space-y-4">

@@ -57,15 +57,68 @@ async function startServer() {
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) { res.status(400).json({ error: "No files provided" }); return; }
 
-      const patientName = (req.body.patientName as string)?.trim() || "Unknown Patient";
       const priorityRaw = (req.body.priority as string) ?? "routine";
       const priority = (["routine", "urgent", "stat"].includes(priorityRaw) ? priorityRaw : "routine") as "routine" | "urgent" | "stat";
 
-      // Group files by Study Instance UID
-      type FileEntry = { buffer: Buffer; sopUID: string; seriesUID: string; instanceNumber: number };
+      const parseDicomPersonName = (raw: string | undefined): string => {
+        if (!raw) return "Unknown Patient";
+        const parts = raw.split("^").map(p => p.trim());
+        const [family = "", given = "", middle = ""] = parts;
+        return [given, middle, family].filter(Boolean).join(" ") || raw;
+      };
+
+      const parseDicomDate = (dateStr: string | undefined): Date | undefined => {
+        if (dateStr?.length === 8) {
+          return new Date(
+            parseInt(dateStr.slice(0, 4), 10),
+            parseInt(dateStr.slice(4, 6), 10) - 1,
+            parseInt(dateStr.slice(6, 8), 10)
+          );
+        }
+        return undefined;
+      };
+
+      const parseDicomSex = (raw: string | undefined): "male" | "female" | "other" | undefined => {
+        switch (raw?.toUpperCase()) {
+          case "M": return "male";
+          case "F": return "female";
+          case "O": return "other";
+          default: return undefined;
+        }
+      };
+
+      // Extract text from a DICOM SR content sequence, returns findings + impression
+      const extractSrReport = (dataset: ReturnType<typeof dicomParser.parseDicom>): { findings: string; impression: string } => {
+        const texts: string[] = [];
+        const walk = (ds: ReturnType<typeof dicomParser.parseDicom>) => {
+          const seq = ds.elements["x0040a730"];
+          if (!seq?.items) return;
+          for (const item of seq.items) {
+            const d2 = item.dataSet;
+            if (!d2) continue;
+            try {
+              if (d2.string("x0040a040")?.trim() === "TEXT") {
+                const t = d2.string("x0040a160")?.trim();
+                if (t) texts.push(t);
+              }
+              walk(d2);
+            } catch {}
+          }
+        };
+        walk(dataset);
+        const full = texts.join("\n\n").trim();
+        const impMatch = full.match(/IMPRESSION\s*:?\s*\r?\n([\s\S]*?)(?:\r?\n\s*\r?\n[A-Z][A-Z ]+:|$)/i);
+        return { findings: full, impression: impMatch ? impMatch[1].trim() : "" };
+      };
+
+      // Group files by Study Instance UID, carrying patient data from tags
+      type FileEntry = { buffer: Buffer; sopUID: string; instanceNumber: number };
+      type SeriesEntry = { modality: string; files: FileEntry[] };
+      type PatientInfo = { name: string; dicomPatientId: string; dateOfBirth?: Date; gender?: "male" | "female" | "other" };
       type StudyEntry = {
         modality: string; description: string; bodyPart: string; studyDate: Date;
-        series: Map<string, FileEntry[]>;
+        referringPhysician: string; patient: PatientInfo;
+        series: Map<string, SeriesEntry>;
       };
       const studyMap = new Map<string, StudyEntry>();
 
@@ -79,22 +132,24 @@ async function startServer() {
           const instanceNumber = parseInt(dataset.string("x00200013") ?? "1", 10) || 1;
           const description = dataset.string("x00081030") ?? dataset.string("x0008103e") ?? "Uploaded Study";
           const bodyPart = dataset.string("x00180015") ?? "";
-          const dateStr = dataset.string("x00080020") ?? "";
-          let studyDate = new Date();
-          if (dateStr.length === 8) {
-            studyDate = new Date(
-              parseInt(dateStr.slice(0, 4), 10),
-              parseInt(dateStr.slice(4, 6), 10) - 1,
-              parseInt(dateStr.slice(6, 8), 10)
-            );
-          }
+          const referringPhysician = parseDicomPersonName(dataset.string("x00080090"));
+          const studyDate = parseDicomDate(dataset.string("x00080020")) ?? new Date();
+
+          const patient: PatientInfo = {
+            name: parseDicomPersonName(dataset.string("x00100010")),
+            dicomPatientId: dataset.string("x00100020") ?? "",
+            dateOfBirth: parseDicomDate(dataset.string("x00100030")),
+            gender: parseDicomSex(dataset.string("x00100040")),
+          };
 
           if (!studyMap.has(studyUID)) {
-            studyMap.set(studyUID, { modality, description, bodyPart, studyDate, series: new Map() });
+            studyMap.set(studyUID, { modality, description, bodyPart, studyDate, referringPhysician, patient, series: new Map() });
           }
           const studyEntry = studyMap.get(studyUID)!;
-          if (!studyEntry.series.has(seriesUID)) studyEntry.series.set(seriesUID, []);
-          studyEntry.series.get(seriesUID)!.push({ buffer: file.buffer, sopUID, seriesUID, instanceNumber });
+          // Use image-series modality for the study (not SR)
+          if (modality !== "SR" && studyEntry.modality === "OT") studyEntry.modality = modality;
+          if (!studyEntry.series.has(seriesUID)) studyEntry.series.set(seriesUID, { modality, files: [] });
+          studyEntry.series.get(seriesUID)!.files.push({ buffer: file.buffer, sopUID, instanceNumber });
         } catch (e) {
           console.error("[Upload] Failed to parse DICOM file:", file.originalname, e);
         }
@@ -105,15 +160,18 @@ async function startServer() {
       const studyIds: number[] = [];
 
       for (const [studyUID, studyEntry] of Array.from(studyMap)) {
+        const { patient } = studyEntry;
         const patientRecord = await db.createPatient({
-          patientId: `PAT-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`,
-          name: patientName,
+          patientId: patient.dicomPatientId || `PAT-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`,
+          name: patient.name,
+          dateOfBirth: patient.dateOfBirth,
+          gender: patient.gender,
           createdBy: user.id,
         });
         const patientId = Number((patientRecord as any)[0]?.insertId ?? (patientRecord as any).insertId);
 
         let totalInstances = 0;
-        for (const instances of Array.from(studyEntry.series.values())) totalInstances += instances.length;
+        for (const s of Array.from(studyEntry.series.values())) totalInstances += s.files.length;
 
         const studyRecord = await db.createStudy({
           studyId: studyUID,
@@ -122,6 +180,7 @@ async function startServer() {
           modality: studyEntry.modality,
           description: studyEntry.description,
           bodyPart: studyEntry.bodyPart,
+          referringPhysician: studyEntry.referringPhysician,
           numberOfSeries: studyEntry.series.size,
           numberOfInstances: totalInstances,
           uploadedBy: user.id,
@@ -130,16 +189,16 @@ async function startServer() {
         const dbStudyId = Number((studyRecord as any)[0]?.insertId ?? (studyRecord as any).insertId);
         studyIds.push(dbStudyId);
 
-        for (const [seriesUID, instanceFiles] of Array.from(studyEntry.series)) {
+        for (const [seriesUID, seriesEntry] of Array.from(studyEntry.series)) {
           const seriesRecord = await db.createSeries({
             seriesId: seriesUID,
             studyId: dbStudyId,
-            modality: studyEntry.modality,
-            numberOfInstances: instanceFiles.length,
+            modality: seriesEntry.modality,
+            numberOfInstances: seriesEntry.files.length,
           });
           const dbSeriesId = Number((seriesRecord as any)[0]?.insertId ?? (seriesRecord as any).insertId);
 
-          for (const inst of instanceFiles) {
+          for (const inst of seriesEntry.files) {
             const relKey = `dicom/${studyUID}/${inst.sopUID}.dcm`;
             const stored = await storagePut(relKey, inst.buffer, "application/dicom");
             await db.createInstance({
@@ -150,6 +209,26 @@ async function startServer() {
               fileKey: stored.key,
               fileSize: inst.buffer.length,
             });
+          }
+
+          // Auto-create a report from SR series
+          if (seriesEntry.modality === "SR" && seriesEntry.files.length > 0) {
+            try {
+              const srDataset = dicomParser.parseDicom(new Uint8Array(seriesEntry.files[0].buffer));
+              const { findings, impression } = extractSrReport(srDataset);
+              if (findings) {
+                await db.createReport({
+                  studyId: dbStudyId,
+                  reportedBy: user.id,
+                  findings,
+                  impression,
+                  status: "final",
+                });
+                console.log("[Upload] Auto-created report from SR series for study", studyUID);
+              }
+            } catch (e) {
+              console.error("[Upload] Failed to extract SR report:", e);
+            }
           }
         }
       }

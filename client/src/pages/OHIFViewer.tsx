@@ -25,6 +25,8 @@ export default function OHIFViewer() {
   const { theme } = useTheme();
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // Maps measurement uid → bullet text so we can remove it if the user clicks "No" to tracking
+  const measurementBulletsRef = useRef<Map<string, string>>(new Map());
   const [iframeLoaded, setIframeLoaded] = useState(false);
 
   const [findings, setFindings] = useState("");
@@ -32,6 +34,7 @@ export default function OHIFViewer() {
   const [recommendations, setRecommendations] = useState("");
   const [editingReportId, setEditingReportId] = useState<number | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const [showNewReportForm, setShowNewReportForm] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
 
   const { data: studyData } = trpc.studies.getById.useQuery(
@@ -55,15 +58,18 @@ export default function OHIFViewer() {
     onError: (e) => toast.error(e.message),
   });
 
-  // Pre-populate draft report when data arrives
+  // Auto-open the panel and pre-populate when reports load
   useEffect(() => {
-    if (!existingReports) return;
+    if (!existingReports || existingReports.length === 0) return;
+    // Open the panel automatically so the report is visible from the start
+    setReportOpen(true);
     const draft = existingReports.find(r => r.status === "draft");
     if (draft && findings === "") {
       setFindings(draft.findings);
       setImpression(draft.impression);
       setRecommendations(draft.recommendations ?? "");
       setEditingReportId(draft.id);
+      setShowNewReportForm(true);
     }
   }, [existingReports]);
 
@@ -87,21 +93,28 @@ export default function OHIFViewer() {
 
     switch (msg.type) {
       case 'OHIF_MEASUREMENT_ADDED':
-        if (msg.findingText) {
+        if (msg.findingText && msg.uid) {
           const bullet = `• ${msg.findingText}`;
+          measurementBulletsRef.current.set(msg.uid, bullet);
           setFindings(prev => {
             const base = prev.trim();
             return base ? `${base}\n${bullet}` : bullet;
           });
-          toast.info(`Measurement added: ${msg.findingText}`, { duration: 2500 });
+          toast.info(`Measurement captured — open the report panel to review`, { duration: 2000 });
         }
         break;
       case 'OHIF_MEASUREMENT_UPDATED':
-        // No-op: re-derive findings from measurements would require a full list;
-        // for now, only new measurements auto-append.
         break;
       case 'OHIF_MEASUREMENT_REMOVED':
-        // Remove the bullet that starts with the matching uid prefix if present
+        if (msg.uid) {
+          const bullet = measurementBulletsRef.current.get(msg.uid);
+          measurementBulletsRef.current.delete(msg.uid);
+          if (bullet) {
+            setFindings(prev =>
+              prev.split('\n').filter(line => line !== bullet).join('\n').trim()
+            );
+          }
+        }
         break;
       case 'OHIF_TOOL_CHANGED':
         setActiveTool(msg.toolId);
@@ -212,9 +225,9 @@ export default function OHIFViewer() {
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {/* Finalized reports (read-only) */}
+            {/* Finalized / final reports — read-only */}
             {existingReports?.filter(r => r.status !== "draft").map(report => (
-              <div key={report.id} className="text-xs space-y-2 border border-border rounded p-3">
+              <div key={report.id} className="text-xs space-y-3 border border-border rounded-lg p-3">
                 <div className="flex items-center gap-2">
                   <Badge className={`text-xs ${statusColors[report.status]}`}>{report.status}</Badge>
                   <span className="text-muted-foreground">
@@ -222,82 +235,97 @@ export default function OHIFViewer() {
                   </span>
                 </div>
                 <div>
-                  <p className="font-medium text-muted-foreground uppercase tracking-wide mb-0.5">Findings</p>
-                  <p className="text-foreground whitespace-pre-wrap">{report.findings}</p>
+                  <p className="font-semibold text-muted-foreground uppercase tracking-wide text-[10px] mb-1">Findings</p>
+                  <p className="text-foreground whitespace-pre-wrap leading-relaxed">{report.findings}</p>
                 </div>
-                <div>
-                  <p className="font-medium text-muted-foreground uppercase tracking-wide mb-0.5">Impression</p>
-                  <p className="text-foreground whitespace-pre-wrap">{report.impression}</p>
-                </div>
+                {report.impression && (
+                  <div>
+                    <p className="font-semibold text-muted-foreground uppercase tracking-wide text-[10px] mb-1">Impression</p>
+                    <p className="text-foreground whitespace-pre-wrap leading-relaxed">{report.impression}</p>
+                  </div>
+                )}
                 {report.recommendations && (
                   <div>
-                    <p className="font-medium text-muted-foreground uppercase tracking-wide mb-0.5">Recommendations</p>
-                    <p className="text-foreground whitespace-pre-wrap">{report.recommendations}</p>
+                    <p className="font-semibold text-muted-foreground uppercase tracking-wide text-[10px] mb-1">Recommendations</p>
+                    <p className="text-foreground whitespace-pre-wrap leading-relaxed">{report.recommendations}</p>
                   </div>
                 )}
               </div>
             ))}
 
-            {/* Draft / new report form */}
-            <div className="space-y-3">
-              <p className="text-xs font-semibold text-foreground">
-                {editingReportId ? "Edit Draft" : "New Report"}
-              </p>
-              <div className="space-y-1">
-                <Label htmlFor="ov-findings" className="text-xs">Findings *</Label>
-                <Textarea
-                  id="ov-findings"
-                  rows={5}
-                  value={findings}
-                  onChange={e => setFindings(e.target.value)}
-                  placeholder="Describe imaging findings… (measurements auto-appended)"
-                  className="bg-background text-sm resize-none"
-                />
+            {/* Add / edit report form — shown when there's a draft or the user clicks Add */}
+            {(showNewReportForm || editingReportId) ? (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-foreground">
+                  {editingReportId ? "Edit Draft" : "New Report"}
+                </p>
+                <div className="space-y-1">
+                  <Label htmlFor="ov-findings" className="text-xs">Findings *</Label>
+                  <Textarea
+                    id="ov-findings"
+                    rows={5}
+                    value={findings}
+                    onChange={e => setFindings(e.target.value)}
+                    placeholder="Describe imaging findings… (measurements auto-appended)"
+                    className="bg-background text-sm resize-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="ov-impression" className="text-xs">Impression *</Label>
+                  <Textarea
+                    id="ov-impression"
+                    rows={3}
+                    value={impression}
+                    onChange={e => setImpression(e.target.value)}
+                    placeholder="Clinical impression…"
+                    className="bg-background text-sm resize-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="ov-recs" className="text-xs">Recommendations</Label>
+                  <Textarea
+                    id="ov-recs"
+                    rows={2}
+                    value={recommendations}
+                    onChange={e => setRecommendations(e.target.value)}
+                    placeholder="Optional follow-up…"
+                    className="bg-background text-sm resize-none"
+                  />
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="ov-impression" className="text-xs">Impression *</Label>
-                <Textarea
-                  id="ov-impression"
-                  rows={3}
-                  value={impression}
-                  onChange={e => setImpression(e.target.value)}
-                  placeholder="Clinical impression…"
-                  className="bg-background text-sm resize-none"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="ov-recs" className="text-xs">Recommendations</Label>
-                <Textarea
-                  id="ov-recs"
-                  rows={2}
-                  value={recommendations}
-                  onChange={e => setRecommendations(e.target.value)}
-                  placeholder="Optional follow-up…"
-                  className="bg-background text-sm resize-none"
-                />
-              </div>
-            </div>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full text-xs"
+                onClick={() => setShowNewReportForm(true)}
+              >
+                + Add Report
+              </Button>
+            )}
           </div>
 
-          <SheetFooter className="px-4 py-3 border-t border-border flex-row gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              onClick={() => handleSave("draft")}
-              disabled={createReport.isPending || updateReport.isPending}
-            >
-              Save Draft
-            </Button>
-            <Button
-              size="sm"
-              className="flex-1"
-              onClick={() => handleSave("final")}
-              disabled={createReport.isPending || updateReport.isPending}
-            >
-              Finalize
-            </Button>
-          </SheetFooter>
+          {(showNewReportForm || editingReportId) && (
+            <SheetFooter className="px-4 py-3 border-t border-border flex-row gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => handleSave("draft")}
+                disabled={createReport.isPending || updateReport.isPending}
+              >
+                Save Draft
+              </Button>
+              <Button
+                size="sm"
+                className="flex-1"
+                onClick={() => handleSave("final")}
+                disabled={createReport.isPending || updateReport.isPending}
+              >
+                Finalize
+              </Button>
+            </SheetFooter>
+          )}
         </SheetContent>
       </Sheet>
     </div>

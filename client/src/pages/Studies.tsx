@@ -2,7 +2,6 @@ import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -24,18 +23,15 @@ export default function Studies() {
   const [, setLocation] = useLocation();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [patientName, setPatientName] = useState("");
   const [priority, setPriority] = useState<"routine" | "urgent" | "stat">("routine");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = async () => {
     if (!selectedFiles.length) { toast.error("Select at least one DICOM file"); return; }
-    if (!patientName.trim()) { toast.error("Enter a patient name"); return; }
     setUploading(true);
     try {
       const formData = new FormData();
-      formData.append("patientName", patientName.trim());
       formData.append("priority", priority);
       selectedFiles.forEach(f => formData.append("files", f));
       const res = await fetch("/api/upload-dicom", { method: "POST", body: formData });
@@ -43,7 +39,6 @@ export default function Studies() {
       const data = await res.json();
       await refetch();
       setUploadOpen(false);
-      setPatientName("");
       setPriority("routine");
       setSelectedFiles([]);
       toast.success("Study uploaded successfully");
@@ -99,15 +94,7 @@ export default function Studies() {
               <DialogTitle>Upload DICOM Study</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2">
-              <div className="space-y-1">
-                <Label htmlFor="patientName">Patient Name</Label>
-                <Input
-                  id="patientName"
-                  placeholder="e.g. John Doe"
-                  value={patientName}
-                  onChange={e => setPatientName(e.target.value)}
-                />
-              </div>
+              <p className="text-sm text-muted-foreground">Patient information will be read automatically from the DICOM file headers.</p>
               <div className="space-y-1">
                 <Label htmlFor="priority">Priority</Label>
                 <Select value={priority} onValueChange={v => setPriority(v as typeof priority)}>

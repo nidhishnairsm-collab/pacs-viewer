@@ -16,11 +16,33 @@ function buildFindingText(m) {
   var tool = (m.toolName || m.type || '').replace(/([A-Z])/g, ' $1').trim();
   if (tool) parts.push(tool);
   if (m.label) parts.push(m.label);
-  var values = Array.isArray(m.displayText) ? m.displayText
-              : m.displayText ? [m.displayText]
-              : m.text        ? [m.text]
-              : [];
-  if (values.length) parts.push(values.join(', '));
+
+  var textValues = [];
+  var dt = m.displayText;
+  if (typeof dt === 'string') {
+    textValues = [dt];
+  } else if (Array.isArray(dt)) {
+    // Array of strings or {value, unit} objects
+    dt.forEach(function(item) {
+      if (typeof item === 'string') textValues.push(item);
+      else if (item && typeof item === 'object') {
+        var v = item.value || item.text || item.label || '';
+        if (v) textValues.push(String(v));
+      }
+    });
+  } else if (dt && typeof dt === 'object') {
+    // OHIF v3 format: { primary: string[], secondary: string[] }
+    // secondary contains slice/instance context (e.g. "S: 0 I: 1") — irrelevant in a report
+    var primary = Array.isArray(dt.primary) ? dt.primary : [];
+    primary.forEach(function(s) {
+      if (typeof s !== 'string') return;
+      // Strip OHIF's "Unknown" anatomy placeholder wherever it appears in the string
+      var cleaned = s.replace(/\bUnknown\b/g, '').replace(/\s{2,}/g, ' ').trim();
+      if (cleaned) textValues.push(cleaned);
+    });
+  }
+  if (!textValues.length && m.text) textValues = [m.text];
+  if (textValues.length) parts.push(textValues.join(', '));
   return parts.join(' — ');
 }
 

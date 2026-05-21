@@ -298,24 +298,39 @@ function extractFramePixelData(
     const dataset = dicomParser.parseDicom(byteArray);
     const transferSyntax = dataset.string("x00020010") ?? null;
 
-    const pixelEl = dataset.elements["x7fe00010"] as
-      | (dicomParser.Element & { hadUndefinedLength?: boolean; items?: Array<{ dataOffset: number; length: number }> })
-      | undefined;
+    // dicom-parser types don't expose encapsulated pixel data fields, so cast.
+    const pixelEl = dataset.elements["x7fe00010"] as (dicomParser.Element & {
+      encapsulatedPixelData?: boolean;
+      hadUndefinedLength?: boolean;
+      // dicom-parser ≥1.8 API: .fragments with .position
+      fragments?: Array<{ position: number; length: number }>;
+      // dicom-parser legacy API: .items with .dataOffset (items[0]=BOT, items[1+]=fragments)
+      items?: Array<{ dataOffset: number; length: number }>;
+    }) | undefined;
 
     if (!pixelEl) {
       return { data: fileBuffer, transferSyntax };
     }
 
-    if (pixelEl.hadUndefinedLength) {
-      // Encapsulated pixel data: items[0] = Basic Offset Table, items[1+] = one fragment per frame
-      const items = pixelEl.items ?? [];
-      const fragment = items[frameIndex + 1] ?? items[1];
-      if (fragment) {
-        const data = Buffer.from(
-          byteArray.slice(fragment.dataOffset, fragment.dataOffset + fragment.length)
-        );
-        return { data, transferSyntax };
+    if (pixelEl.encapsulatedPixelData || pixelEl.hadUndefinedLength) {
+      // Current API: .fragments[N].position gives the byte offset in the full array
+      if (pixelEl.fragments && pixelEl.fragments.length > 0) {
+        const frag = pixelEl.fragments[Math.min(frameIndex, pixelEl.fragments.length - 1)];
+        return {
+          data: Buffer.from(byteArray.slice(frag.position, frag.position + frag.length)),
+          transferSyntax,
+        };
       }
+
+      // Legacy API fallback: items[0]=BOT, items[1+]=frame fragments
+      if (pixelEl.items && pixelEl.items.length > 1) {
+        const frag = pixelEl.items[frameIndex + 1] ?? pixelEl.items[1];
+        return {
+          data: Buffer.from(byteArray.slice(frag.dataOffset, frag.dataOffset + frag.length)),
+          transferSyntax,
+        };
+      }
+
       return { data: fileBuffer, transferSyntax };
     }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { initCornerstone, displayDICOMImage } from "@/lib/cornerstone";
+import { initCornerstone, displayDICOMImage, cornerstone } from "@/lib/cornerstone";
 import { toast } from "sonner";
 import {
   Play,
@@ -59,6 +59,16 @@ export function EnhancedDicomViewer({ imageIds, onClose, inline = false }: Enhan
     init();
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Destroy the rendering engine on unmount so stale WebGL contexts don't prevent re-render.
+  // Refs are null by the time useEffect cleanup fires, so we reference the engine by its ID.
+  useEffect(() => {
+    return () => {
+      try {
+        cornerstone.getRenderingEngine('pacsRenderingEngine')?.destroy();
+      } catch {}
+    };
+  }, []);
 
   // Load image whenever frame changes or initialization completes
   const loadCurrentImage = useCallback(async () => {
