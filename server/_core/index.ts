@@ -5,6 +5,7 @@ import net from "net";
 import path from "path";
 import crypto from "crypto";
 import multer from "multer";
+import AdmZip from "adm-zip";
 import dicomParser from "dicom-parser";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
@@ -47,15 +48,72 @@ async function startServer() {
   // OAuth routes (no-op locally)
   registerOAuthRoutes(app);
 
-  // DICOM file upload endpoint
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
-  app.post("/api/upload-dicom", upload.array("files"), async (req, res) => {
+  // DICOM file upload endpoint — accepts .dcm files or a .zip containing .dcm files
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+
+  const uploadMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) =>
+    upload.array("files")(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        const msg = err.code === "LIMIT_FILE_SIZE"
+          ? "File too large — maximum 500 MB per upload."
+          : err.message;
+        res.status(400).json({ error: msg }); return;
+      }
+      if (err) { res.status(400).json({ error: String(err) }); return; }
+      next();
+    });
+
+  app.post("/api/upload-dicom", uploadMiddleware, async (req, res) => {
     try {
       const user = await sdk.authenticateRequest(req).catch(() => null);
       if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
 
-      const files = req.files as Express.Multer.File[];
-      if (!files || files.length === 0) { res.status(400).json({ error: "No files provided" }); return; }
+      const rawFiles = req.files as Express.Multer.File[];
+      if (!rawFiles || rawFiles.length === 0) { res.status(400).json({ error: "No files provided" }); return; }
+
+      // Returns true if the buffer looks like a DICOM file.
+      // Standard DICOM: 128-byte preamble + "DICM" magic at offset 128.
+      // Legacy ACR-NEMA: no preamble, starts with a low-group tag (0008,xxxx etc.).
+      const isDicom = (buf: Buffer): boolean => {
+        if (buf.length < 132) return false;
+        if (buf[128] === 0x44 && buf[129] === 0x49 && buf[130] === 0x43 && buf[131] === 0x4d) return true; // "DICM"
+        // ACR-NEMA heuristic: first two bytes are a low even group number (0002–0008)
+        const group = buf[0] | (buf[1] << 8);
+        return group >= 0x0002 && group <= 0x0008 && (group & 1) === 0;
+      };
+
+      // Expand any ZIP files into their constituent DICOM buffers.
+      // Uses content-based detection (DICM magic bytes) so files without .dcm
+      // extension (e.g. .ima, .img, or bare files common in clinical exports) are included.
+      const files: Express.Multer.File[] = [];
+      for (const f of rawFiles) {
+        const isZip = f.originalname.toLowerCase().endsWith(".zip") || f.mimetype === "application/zip";
+        if (isZip) {
+          try {
+            const zip = new AdmZip(f.buffer);
+            const entries = zip.getEntries();
+            console.log(`[Upload] ZIP "${f.originalname}" contains ${entries.length} total entries`);
+            let skipped = 0;
+            for (const entry of entries) {
+              if (entry.isDirectory) continue;
+              const entryName = entry.entryName;
+              // Skip macOS metadata artifacts
+              if (entryName.startsWith("__MACOSX") || entryName.includes("/.DS_Store")) continue;
+              const buf = entry.getData();
+              if (!isDicom(buf)) { skipped++; continue; }
+              files.push({ ...f, originalname: entry.name || entryName, buffer: buf, size: buf.length });
+            }
+            console.log(`[Upload] Extracted ${files.length} DICOM file(s) from ZIP (skipped ${skipped} non-DICOM entries)`);
+          } catch (e) {
+            console.error("[Upload] Failed to extract ZIP:", f.originalname, e);
+            res.status(400).json({ error: `Failed to open ZIP file: ${(e as Error).message}` }); return;
+          }
+        } else {
+          files.push(f);
+        }
+      }
+
+      if (files.length === 0) { res.status(400).json({ error: "No DICOM files found. If uploading a ZIP, ensure it contains .dcm files or standard DICOM images." }); return; }
 
       const priorityRaw = (req.body.priority as string) ?? "routine";
       const priority = (["routine", "urgent", "stat"].includes(priorityRaw) ? priorityRaw : "routine") as "routine" | "urgent" | "stat";
@@ -68,12 +126,11 @@ async function startServer() {
       };
 
       const parseDicomDate = (dateStr: string | undefined): Date | undefined => {
-        if (dateStr?.length === 8) {
-          return new Date(
-            parseInt(dateStr.slice(0, 4), 10),
-            parseInt(dateStr.slice(4, 6), 10) - 1,
-            parseInt(dateStr.slice(6, 8), 10)
-          );
+        if (dateStr?.length === 8 && /^\d{8}$/.test(dateStr)) {
+          const y = parseInt(dateStr.slice(0, 4), 10);
+          const m = parseInt(dateStr.slice(4, 6), 10) - 1;
+          const d = parseInt(dateStr.slice(6, 8), 10);
+          return new Date(Date.UTC(y, m, d)); // UTC avoids timezone-shift on serialization
         }
         return undefined;
       };
@@ -161,14 +218,32 @@ async function startServer() {
 
       for (const [studyUID, studyEntry] of Array.from(studyMap)) {
         const { patient } = studyEntry;
-        const patientRecord = await db.createPatient({
-          patientId: patient.dicomPatientId || `PAT-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`,
-          name: patient.name,
-          dateOfBirth: patient.dateOfBirth,
-          gender: patient.gender,
-          createdBy: user.id,
-        });
-        const patientId = Number((patientRecord as any)[0]?.insertId ?? (patientRecord as any).insertId);
+
+        // Find-or-create patient — patientId has a UNIQUE constraint so re-uploading
+        // the same patient (e.g. two studies from the same ZIP) must not double-insert.
+        const dicomPatientId = patient.dicomPatientId || `PAT-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`;
+        let patientId: number;
+        const existingPatient = await db.findPatientByDicomId(dicomPatientId);
+        if (existingPatient) {
+          patientId = existingPatient.id;
+        } else {
+          const patientRecord = await db.createPatient({
+            patientId: dicomPatientId,
+            name: patient.name,
+            dateOfBirth: patient.dateOfBirth,
+            gender: patient.gender,
+            createdBy: user.id,
+          });
+          patientId = Number((patientRecord as any)[0]?.insertId ?? (patientRecord as any).insertId);
+        }
+
+        // Skip studies that were already uploaded (same Study Instance UID).
+        const existingStudy = await db.findStudyByDicomUid(studyUID);
+        if (existingStudy) {
+          console.log(`[Upload] Skipping duplicate study UID: ${studyUID}`);
+          studyIds.push(existingStudy.id);
+          continue;
+        }
 
         let totalInstances = 0;
         for (const s of Array.from(studyEntry.series.values())) totalInstances += s.files.length;
@@ -235,8 +310,9 @@ async function startServer() {
 
       res.json({ studyIds, studyId: studyIds[0] });
     } catch (error) {
-      console.error("[Upload] Error:", error);
-      res.status(500).json({ error: "Upload failed" });
+      console.error("[Upload] Unexpected error:", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: `Upload failed: ${msg}` });
     }
   });
 

@@ -121,10 +121,17 @@ export async function searchPatients(searchTerm: string) {
   ).orderBy(desc(patients.createdAt));
 }
 
+export async function findPatientByDicomId(dicomPatientId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(patients).where(eq(patients.patientId, dicomPatientId)).limit(1);
+  return rows[0] ?? undefined;
+}
+
 export async function createPatient(patient: InsertPatient) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
+
   const result = await db.insert(patients).values(patient);
   return result;
 }
@@ -177,10 +184,17 @@ export async function getStudyById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function findStudyByDicomUid(studyInstanceUid: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(studies).where(eq(studies.studyId, studyInstanceUid)).limit(1);
+  return rows[0] ?? undefined;
+}
+
 export async function createStudy(study: InsertStudy) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
+
   const result = await db.insert(studies).values(study);
   return result;
 }

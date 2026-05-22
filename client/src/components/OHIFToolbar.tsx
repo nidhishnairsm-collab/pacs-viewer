@@ -7,8 +7,9 @@ import {
   Circle, CircleDot, Square, PenLine, Spline, Waypoints, ArrowUpRight, Crop,
   Crosshair, Globe, AlignCenter, Link2, Eye, Inspect,
   RotateCw, FlipHorizontal2, FlipVertical2, RefreshCw, Contrast,
-  Play, Camera, Tag, FileText, Grid2x2, LayoutTemplate,
+  Play, Pause, Camera, Tag, FileText, Grid2x2, LayoutTemplate,
 } from "lucide-react";
+import { useState } from "react";
 
 interface OHIFToolbarProps {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
@@ -27,10 +28,16 @@ interface ToolBtn {
 }
 
 export default function OHIFToolbar({ iframeRef, activeTool, reportOpen, onToggleReport, hasReport }: OHIFToolbarProps) {
+  const [cineActive, setCineActive] = useState(false);
   const send = (msg: Parameters<typeof sendToOhif>[1]) => sendToOhif(iframeRef.current, msg);
   const tool = (id: string) => send({ type: 'OHIF_SET_TOOL', toolName: id });
   const cmd = (commandName: string, options?: Record<string, unknown>) =>
     send({ type: 'OHIF_RUN_COMMAND', commandName, options });
+
+  const toggleCine = () => {
+    send({ type: 'OHIF_TOGGLE_CINE' });
+    setCineActive(v => !v);
+  };
 
   // ── Group 1: Navigation ───────────────────────────────────────────────
   const navTools: ToolBtn[] = [
@@ -115,6 +122,22 @@ export default function OHIFToolbar({ iframeRef, activeTool, reportOpen, onToggl
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col items-center gap-0.5 bg-background/90 backdrop-blur-sm border-r border-border py-2 px-1 w-12 h-full pointer-events-auto overflow-y-auto">
 
+        {/* Cine playback — top of toolbar for easy access */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={cineActive ? "secondary" : "ghost"}
+              size="icon"
+              className={`w-9 h-9 ${cineActive ? "text-blue-400" : ""}`}
+              onClick={toggleCine}
+            >
+              {cineActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="text-xs">{cineActive ? "Pause Cine" : "Play Cine"}</TooltipContent>
+        </Tooltip>
+        {divider('d0')}
+
         {/* Navigation */}
         {navTools.map(renderBtn)}
         {divider('d1')}
@@ -164,14 +187,6 @@ export default function OHIFToolbar({ iframeRef, activeTool, reportOpen, onToggl
         {divider('d6')}
 
         {/* Actions */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="w-9 h-9" onClick={() => send({ type: 'OHIF_TOGGLE_CINE' })}>
-              <Play className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right" className="text-xs">Toggle Cine</TooltipContent>
-        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon" className="w-9 h-9" onClick={() => cmd('showDownloadViewportModal')}>

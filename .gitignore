@@ -109,3 +109,10 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
+
+# DICOM files
+*.dcm
+dcom/
+
+# Uploads
+uploads/

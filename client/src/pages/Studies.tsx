@@ -109,24 +109,31 @@ export default function Studies() {
                 </Select>
               </div>
               <div className="space-y-1">
-                <Label>DICOM Files (.dcm)</Label>
+                <Label>DICOM Files</Label>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".dcm"
+                  accept=".dcm,.zip"
                   multiple
                   className="hidden"
                   onChange={e => setSelectedFiles(Array.from(e.target.files ?? []))}
                 />
                 <Button variant="outline" className="w-full" onClick={() => fileInputRef.current?.click()}>
                   <Upload className="h-4 w-4 mr-2" />
-                  {selectedFiles.length > 0 ? `${selectedFiles.length} file(s) selected` : "Choose files"}
+                  {selectedFiles.length > 0
+                    ? selectedFiles.length === 1 && selectedFiles[0].name.toLowerCase().endsWith(".zip")
+                      ? `ZIP selected: ${selectedFiles[0].name}`
+                      : `${selectedFiles.length} file(s) selected`
+                    : "Choose .dcm files or a .zip archive"}
                 </Button>
                 {selectedFiles.length > 0 && (
-                  <ul className="text-sm text-muted-foreground space-y-0.5 mt-1">
+                  <ul className="text-sm text-muted-foreground space-y-0.5 mt-1 max-h-32 overflow-y-auto">
                     {selectedFiles.map(f => <li key={f.name} className="truncate">{f.name}</li>)}
                   </ul>
                 )}
+                <p className="text-xs text-muted-foreground">
+                  Upload individual .dcm files or a .zip archive containing DICOM images.
+                </p>
               </div>
             </div>
             <DialogFooter>
