@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { ArrowLeft, AlertCircle } from "lucide-react";
 import { sendToOhif, type OhifInboundMessage } from "@/lib/ohifBridge";
 import OHIFToolbar from "@/components/OHIFToolbar";
+import { RadialToolMenu, DEFAULT_RADIAL_TOOLS } from "@/components/RadialToolMenu";
 import { useTheme } from "@/contexts/ThemeContext";
 
 export default function OHIFViewer() {
@@ -28,6 +29,8 @@ export default function OHIFViewer() {
   // Maps measurement uid → bullet text so we can remove it if the user clicks "No" to tracking
   const measurementBulletsRef = useRef<Map<string, string>>(new Map());
   const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [radialOpen, setRadialOpen] = useState(false);
+  const [radialPos, setRadialPos] = useState({ x: 0, y: 0 });
 
   const [findings, setFindings] = useState("");
   const [impression, setImpression] = useState("");
@@ -84,6 +87,39 @@ export default function OHIFViewer() {
     setIframeLoaded(true);
     sendToOhif(iframeRef.current, { type: 'OHIF_SET_THEME', theme: theme === 'dark' ? 'dark' : 'light' });
   }, [theme]);
+
+  const sendMsg = useCallback((msg: Parameters<typeof sendToOhif>[1]) => sendToOhif(iframeRef.current, msg), []);
+  const activateTool = useCallback((id: string) => sendMsg({ type: 'OHIF_SET_TOOL', toolName: id }), [sendMsg]);
+
+  const radialTools = useMemo(
+    () => DEFAULT_RADIAL_TOOLS(
+      activateTool,
+      () => sendMsg({ type: 'OHIF_RESET_VIEWPORT' }),
+      () => sendMsg({ type: 'OHIF_INVERT' }),
+    ),
+    [activateTool, sendMsg],
+  );
+
+  // Intercept right-click inside the OHIF iframe and show the radial tool menu
+  useEffect(() => {
+    if (!iframeLoaded) return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+    if (!doc) return;
+
+    const handler = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const me = e as MouseEvent;
+      const rect = iframe.getBoundingClientRect();
+      setRadialPos({ x: me.clientX + rect.left, y: me.clientY + rect.top });
+      setRadialOpen(true);
+    };
+
+    doc.addEventListener("contextmenu", handler, true);
+    return () => doc.removeEventListener("contextmenu", handler, true);
+  }, [iframeLoaded]);
 
   // postMessage bridge: OHIF → parent
   const handleOhifMessage = useCallback((event: MessageEvent) => {
@@ -208,6 +244,15 @@ export default function OHIFViewer() {
           </span>
         )}
       </div>
+
+      {/* Right-click radial tool menu */}
+      <RadialToolMenu
+        x={radialPos.x}
+        y={radialPos.y}
+        open={radialOpen}
+        onClose={() => setRadialOpen(false)}
+        tools={radialTools}
+      />
 
       {/* Radiology report — slide-over from right */}
       <Sheet open={reportOpen} onOpenChange={setReportOpen}>
