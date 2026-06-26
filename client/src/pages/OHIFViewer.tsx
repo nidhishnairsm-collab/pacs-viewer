@@ -36,11 +36,12 @@ export default function OHIFViewer() {
   const [impression, setImpression] = useState("");
   const [recommendations, setRecommendations] = useState("");
   const [editingReportId, setEditingReportId] = useState<number | null>(null);
+  const [isAmending, setIsAmending] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [showNewReportForm, setShowNewReportForm] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
 
-  const { data: studyData } = trpc.studies.getById.useQuery(
+  const { data: studyData, refetch: refetchStudy } = trpc.studies.getById.useQuery(
     { id: studyDbId! },
     { enabled: !!studyDbId }
   );
@@ -53,26 +54,35 @@ export default function OHIFViewer() {
   );
 
   const createReport = trpc.reports.create.useMutation({
-    onSuccess: () => { toast.success("Report saved"); refetchReports(); },
     onError: (e) => toast.error(e.message),
   });
   const updateReport = trpc.reports.update.useMutation({
-    onSuccess: () => { toast.success("Report updated"); refetchReports(); },
     onError: (e) => toast.error(e.message),
+  });
+  const updateStudyStatus = trpc.studies.updateStatus.useMutation({
+    onSuccess: () => refetchStudy(),
   });
 
   // Auto-open the panel and pre-populate when reports load
   useEffect(() => {
-    if (!existingReports || existingReports.length === 0) return;
-    // Open the panel automatically so the report is visible from the start
+    if (!existingReports || existingReports.length === 0 || findings !== "") return;
     setReportOpen(true);
     const draft = existingReports.find(r => r.status === "draft");
-    if (draft && findings === "") {
+    if (draft) {
       setFindings(draft.findings);
       setImpression(draft.impression);
       setRecommendations(draft.recommendations ?? "");
       setEditingReportId(draft.id);
+      setIsAmending(false);
       setShowNewReportForm(true);
+    } else {
+      // Load latest final/amended report for amendment (reports ordered desc by createdAt)
+      const latest = existingReports[0];
+      setFindings(latest.findings);
+      setImpression(latest.impression);
+      setRecommendations(latest.recommendations ?? "");
+      setEditingReportId(latest.id);
+      setIsAmending(true);
     }
   }, [existingReports]);
 
@@ -163,15 +173,39 @@ export default function OHIFViewer() {
     return () => window.removeEventListener('message', handleOhifMessage);
   }, [handleOhifMessage]);
 
-  const handleSave = (status: "draft" | "final") => {
+  const handleSave = async (status: "draft" | "final") => {
     if (!findings.trim() || !impression.trim()) {
       toast.error("Findings and Impression are required");
       return;
     }
-    if (editingReportId) {
-      updateReport.mutate({ id: editingReportId, findings, impression, recommendations: recommendations || undefined, status });
-    } else if (studyDbId) {
-      createReport.mutate({ studyId: studyDbId, findings, impression, recommendations: recommendations || undefined, status });
+    try {
+      if (isAmending && status === "final") {
+        await updateReport.mutateAsync({ id: editingReportId!, status: "amended" });
+        await createReport.mutateAsync({ studyId: studyDbId!, findings, impression, recommendations: recommendations || undefined, status: "amended" });
+        setFindings(""); setImpression(""); setRecommendations("");
+        setEditingReportId(null); setIsAmending(false);
+        toast.success("Report amended");
+      } else if (isAmending && status === "draft") {
+        const row = await createReport.mutateAsync({ studyId: studyDbId!, findings, impression, recommendations: recommendations || undefined, status: "draft" });
+        setEditingReportId(row?.id ?? null);
+        setIsAmending(false);
+        toast.success("Draft saved");
+      } else if (editingReportId) {
+        await updateReport.mutateAsync({ id: editingReportId, findings, impression, recommendations: recommendations || undefined, status });
+        if (status === "final") { setIsAmending(true); toast.success("Report finalized"); }
+        else toast.success("Draft saved");
+      } else if (studyDbId) {
+        const row = await createReport.mutateAsync({ studyId: studyDbId, findings, impression, recommendations: recommendations || undefined, status });
+        setEditingReportId(row?.id ?? null);
+        if (status === "final") { setIsAmending(true); toast.success("Report finalized"); }
+        else toast.success("Draft saved");
+      }
+      refetchReports();
+      if (status === "final" && studyDbId) {
+        updateStudyStatus.mutate({ id: studyDbId, status: "reported" });
+      }
+    } catch {
+      // errors handled by mutation onError
     }
   };
 
@@ -367,7 +401,7 @@ export default function OHIFViewer() {
                 onClick={() => handleSave("final")}
                 disabled={createReport.isPending || updateReport.isPending}
               >
-                Finalize
+                {isAmending ? "Submit Amendment" : "Finalize"}
               </Button>
             </SheetFooter>
           )}

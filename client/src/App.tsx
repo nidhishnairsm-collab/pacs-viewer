@@ -2,7 +2,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import GuestUpload from "@/pages/GuestUpload";
-import AddPatient from "@/pages/AddPatient";
 import StudyDetail from "@/pages/StudyDetail";
 import PatientDetail from "@/pages/PatientDetail";
 import Login from "@/pages/Login";
@@ -24,7 +23,6 @@ function Router() {
       <Route path={"/"} component={Dashboard} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/patients" component={Patients} />
-      <Route path="/patients/add" component={AddPatient} />
       <Route path="/patients/:id" component={PatientDetail} />
       <Route path="/studies" component={Studies} />
       <Route path="/studies/:id" component={StudyDetail} />

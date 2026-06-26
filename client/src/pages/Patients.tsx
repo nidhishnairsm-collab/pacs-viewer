@@ -2,10 +2,12 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users, Search, Plus } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Users, Search, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
+import { toast } from "sonner";
 import {
   Table,
   TableBody,
@@ -17,7 +19,17 @@ import {
 
 export default function Patients() {
   const [searchTerm, setSearchTerm] = useState("");
-  const { data: patients, isLoading } = trpc.patients.list.useQuery();
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const { data: patients, isLoading, refetch } = trpc.patients.list.useQuery();
+
+  const deletePatient = trpc.patients.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Patient deleted");
+      setDeletingId(null);
+      refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const filteredPatients = patients?.filter(patient =>
     patient.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -27,19 +39,11 @@ export default function Patients() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">Patients</h1>
-            <p className="text-muted-foreground mt-1">
-              Manage patient records and information
-            </p>
-          </div>
-          <Link href="/patients/add">
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Patient
-            </Button>
-          </Link>
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Patients</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage patient records and information
+          </p>
         </div>
 
         <Card>
@@ -101,11 +105,21 @@ export default function Patients() {
                         </TableCell>
                         <TableCell>{patient.contactNumber || "N/A"}</TableCell>
                         <TableCell className="text-right">
-                          <Link href={`/patients/${patient.id}`}>
-                            <Button variant="ghost" size="sm">
-                              View
+                          <div className="flex items-center justify-end gap-1">
+                            <Link href={`/patients/${patient.id}`}>
+                              <Button variant="ghost" size="sm">
+                                View
+                              </Button>
+                            </Link>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setDeletingId(patient.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </Button>
-                          </Link>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -116,6 +130,29 @@ export default function Patients() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={deletingId !== null} onOpenChange={open => !open && setDeletingId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Patient</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete the patient and all associated studies, series, images, and reports. This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingId(null)} disabled={deletePatient.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deletingId !== null && deletePatient.mutate({ id: deletingId })}
+              disabled={deletePatient.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

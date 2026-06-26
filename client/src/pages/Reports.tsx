@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, Eye, Download } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { FileText, Eye, Download, History, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
+import { toast } from "sonner";
 import { exportReportPdf } from "@/lib/reportPdf";
 import {
   Table,
@@ -25,12 +27,45 @@ const getStatusColor = (status: string) => {
 };
 
 export default function Reports() {
-  const { data: reports, isLoading } = trpc.reports.list.useQuery();
+  const { data: reports, isLoading, refetch } = trpc.reports.list.useQuery();
   const [statusFilter, setStatusFilter] = useState("all");
+  const [expandedStudies, setExpandedStudies] = useState<Set<number>>(new Set());
+  const [deletingReportId, setDeletingReportId] = useState<number | null>(null);
 
-  const filtered = (reports ?? []).filter(
-    item => statusFilter === "all" || item.report.status === statusFilter
-  );
+  const deleteReport = trpc.reports.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Report deleted");
+      setDeletingReportId(null);
+      refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Group by study, latest report first per study (already DESC by createdAt from server)
+  const groupedByStudy = useMemo(() => {
+    const map = new Map<number, NonNullable<typeof reports>>();
+    for (const item of reports ?? []) {
+      const key = item.study?.id ?? item.report.studyId;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(item);
+    }
+    return Array.from(map.values());
+  }, [reports]);
+
+  // For status filter: match against the current (latest) report's status
+  const filtered = groupedByStudy.filter(group => {
+    const current = group[0];
+    return statusFilter === "all" || current.report.status === statusFilter;
+  });
+
+  const toggleHistory = (studyId: number) => {
+    setExpandedStudies(prev => {
+      const next = new Set(prev);
+      if (next.has(studyId)) next.delete(studyId);
+      else next.add(studyId);
+      return next;
+    });
+  };
 
   return (
     <DashboardLayout>
@@ -79,51 +114,112 @@ export default function Reports() {
                       <TableHead>Study</TableHead>
                       <TableHead>Modality</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
+                      <TableHead>Last Updated</TableHead>
+                      <TableHead>Versions</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
-                      <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filtered.map(item => (
-                      <TableRow key={item.report.id}>
-                        <TableCell className="font-medium">
-                          {item.patient?.name ?? "Unknown"}
-                        </TableCell>
-                        <TableCell className="max-w-xs truncate">
-                          {item.study?.description ?? item.study?.studyId ?? "—"}
-                        </TableCell>
-                        <TableCell>
-                          <span className="font-mono text-sm">{item.study?.modality ?? "—"}</span>
-                        </TableCell>
-                        <TableCell>
-                          <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(item.report.status)}`}>
-                            {item.report.status}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {new Date(item.report.createdAt).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Link href={`/studies/${item.study?.id}`}>
-                            <Button variant="ghost" size="sm" disabled={!item.study?.id}>
-                              <Eye className="h-4 w-4 mr-1" />
-                              View Study
-                            </Button>
-                          </Link>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => exportReportPdf({ patient: item.patient, study: item.study, report: item.report })}
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            PDF
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {filtered.map(group => {
+                      const current = group[0];
+                      const studyId = current.study?.id ?? current.report.studyId;
+                      const isExpanded = expandedStudies.has(studyId);
+                      const hasHistory = group.length > 1;
+
+                      return (
+                        <Fragment key={`study-${studyId}`}>
+                          <TableRow key={`current-${current.report.id}`}>
+                            <TableCell className="font-medium">
+                              {current.patient?.name ?? "Unknown"}
+                            </TableCell>
+                            <TableCell className="max-w-xs truncate">
+                              {current.study?.description ?? current.study?.studyId ?? "—"}
+                            </TableCell>
+                            <TableCell>
+                              <span className="font-mono text-sm">{current.study?.modality ?? "—"}</span>
+                            </TableCell>
+                            <TableCell>
+                              <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(current.report.status)}`}>
+                                {current.report.status}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              {new Date(current.report.createdAt).toLocaleDateString()}
+                            </TableCell>
+                            <TableCell>
+                              {hasHistory ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="gap-1 text-xs h-7"
+                                  onClick={() => toggleHistory(studyId)}
+                                >
+                                  <History className="h-3 w-3" />
+                                  {group.length} versions
+                                  {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">1 version</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <Link href={`/studies/${current.study?.id}`}>
+                                  <Button variant="ghost" size="sm" disabled={!current.study?.id}>
+                                    <Eye className="h-4 w-4 mr-1" />
+                                    View Study
+                                  </Button>
+                                </Link>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => exportReportPdf({ patient: current.patient, study: current.study, report: current.report, radiologistName: current.radiologistName ?? null })}
+                                >
+                                  <Download className="h-4 w-4 mr-1" />
+                                  PDF
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                  onClick={() => setDeletingReportId(current.report.id)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+
+                          {/* History rows */}
+                          {isExpanded && group.slice(1).map((item, idx) => (
+                            <TableRow key={`history-${item.report.id}`} className="bg-muted/30 text-sm">
+                              <TableCell colSpan={3} className="pl-8 text-muted-foreground italic">
+                                Version {group.length - 1 - idx} (superseded)
+                              </TableCell>
+                              <TableCell>
+                                <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(item.report.status)}`}>
+                                  {item.report.status}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {new Date(item.report.createdAt).toLocaleDateString()}
+                              </TableCell>
+                              <TableCell />
+                              <TableCell className="text-right">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => exportReportPdf({ patient: item.patient, study: item.study, report: item.report, radiologistName: item.radiologistName ?? null })}
+                                >
+                                  <Download className="h-4 w-4 mr-1" />
+                                  PDF
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -131,6 +227,29 @@ export default function Reports() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={deletingReportId !== null} onOpenChange={open => !open && setDeletingReportId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Report</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete this report. This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingReportId(null)} disabled={deleteReport.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deletingReportId !== null && deleteReport.mutate({ id: deletingReportId })}
+              disabled={deleteReport.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

@@ -1,10 +1,12 @@
-import { useEffect } from "react";
+import { useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   Calendar,
@@ -16,11 +18,13 @@ import {
   Share2,
   Edit,
   Activity,
+  Trash2,
 } from "lucide-react";
 
 export default function PatientDetail() {
   const [, params] = useRoute("/patients/:id");
   const [, setLocation] = useLocation();
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const patientId = params?.id ? parseInt(params.id) : null;
 
   const { data: patient, isLoading } = trpc.patients.getById.useQuery(
@@ -32,6 +36,14 @@ export default function PatientDetail() {
     { patientId: patientId! },
     { enabled: !!patientId }
   );
+
+  const deletePatient = trpc.patients.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Patient deleted");
+      setLocation("/patients");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (isLoading) {
     return (
@@ -95,6 +107,15 @@ export default function PatientDetail() {
               <Button variant="outline" size="sm" className="border-border">
                 <Share2 className="w-4 h-4 mr-2" />
                 Share
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                onClick={() => setShowDeleteDialog(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete
               </Button>
             </div>
           </div>
@@ -326,6 +347,29 @@ export default function PatientDetail() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Patient</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete <strong>{patient?.name}</strong> and all associated studies, series, images, and reports. This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={deletePatient.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => patientId && deletePatient.mutate({ id: patientId })}
+              disabled={deletePatient.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, Eye, Upload, Loader2 } from "lucide-react";
+import { FileText, Eye, Upload, Loader2, Trash2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import DashboardLayout from "@/components/DashboardLayout";
 import { toast } from "sonner";
@@ -25,7 +25,17 @@ export default function Studies() {
   const [uploading, setUploading] = useState(false);
   const [priority, setPriority] = useState<"routine" | "urgent" | "stat">("routine");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const deleteStudy = trpc.studies.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Study deleted");
+      setDeletingId(null);
+      refetch();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const handleUpload = async () => {
     if (!selectedFiles.length) { toast.error("Select at least one DICOM file"); return; }
@@ -208,12 +218,22 @@ export default function Studies() {
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Link href={`/viewer/${item.study.id}`}>
-                            <Button variant="ghost" size="sm">
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
+                          <div className="flex items-center justify-end gap-1">
+                            <Link href={`/viewer/${item.study.id}`}>
+                              <Button variant="ghost" size="sm">
+                                <Eye className="h-4 w-4 mr-1" />
+                                View
+                              </Button>
+                            </Link>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setDeletingId(item.study.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </Button>
-                          </Link>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -224,6 +244,29 @@ export default function Studies() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={deletingId !== null} onOpenChange={open => !open && setDeletingId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Study</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete the study and all associated series, images, and reports. This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingId(null)} disabled={deleteStudy.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deletingId !== null && deleteStudy.mutate({ id: deletingId })}
+              disabled={deleteStudy.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

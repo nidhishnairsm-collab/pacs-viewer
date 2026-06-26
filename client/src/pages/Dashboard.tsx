@@ -1,12 +1,16 @@
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Users, FileText, Clock, ScanLine } from "lucide-react";
+import { Activity, Users, FileText, Clock, ScanLine, AlertTriangle, TrendingUp, CheckCircle } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import DashboardLayout from "@/components/DashboardLayout";
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
+  PieChart, Pie, Legend,
+  LineChart, Line,
+} from "recharts";
 import { useAuth } from "@/_core/hooks/useAuth";
 
 function getGreeting() {
@@ -86,12 +90,185 @@ function StatCard({ title, value, icon: Icon, description, gradient, delay }: {
   );
 }
 
+function PriorityAlertBar({ counts }: { counts: { routine: number; urgent: number; stat: number } }) {
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">Study Priority Breakdown</span>
+          {counts.stat > 0 && (
+            <span className="flex items-center gap-1 ml-auto text-xs font-semibold text-red-600 dark:text-red-400">
+              <span className="inline-block h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+              {counts.stat} STAT {counts.stat === 1 ? "case" : "cases"} require immediate attention
+            </span>
+          )}
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1 flex items-center justify-between rounded-lg bg-slate-100 dark:bg-slate-800 px-4 py-3">
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Routine</span>
+            <span className="text-lg font-bold text-slate-700 dark:text-slate-200">{counts.routine}</span>
+          </div>
+          <div className="flex-1 flex items-center justify-between rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+              <span className="text-xs font-medium text-amber-700 dark:text-amber-400">Urgent</span>
+            </div>
+            <span className="text-lg font-bold text-amber-700 dark:text-amber-300">{counts.urgent}</span>
+          </div>
+          <div className="flex-1 flex items-center justify-between rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-4 py-3">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+              <span className="text-xs font-medium text-red-700 dark:text-red-400">STAT</span>
+            </div>
+            <span className="text-lg font-bold text-red-700 dark:text-red-300">{counts.stat}</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  pending:     "#f59e0b",
+  in_progress: "#3b82f6",
+  completed:   "#10b981",
+  reported:    "#8b5cf6",
+};
+
+function StatusDonutChart({ data }: { data: { name: string; value: number; status: string }[] }) {
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <PieChart>
+        <Pie
+          data={data}
+          cx="50%"
+          cy="50%"
+          innerRadius={55}
+          outerRadius={80}
+          paddingAngle={3}
+          dataKey="value"
+        >
+          {data.map((entry) => (
+            <Cell key={entry.status} fill={STATUS_COLORS[entry.status] || "#94a3b8"} />
+          ))}
+        </Pie>
+        <Tooltip
+          contentStyle={{
+            background: "var(--card)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            color: "var(--card-foreground)",
+            fontSize: "12px",
+            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+          }}
+        />
+        <Legend
+          iconType="circle"
+          iconSize={8}
+          formatter={(value) => (
+            <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{value}</span>
+          )}
+        />
+      </PieChart>
+    </ResponsiveContainer>
+  );
+}
+
+function StudyTrendChart({ data }: { data: { day: string; count: number }[] }) {
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <LineChart data={data} margin={{ top: 4, right: 4, bottom: 4, left: -20 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+        <XAxis
+          dataKey="day"
+          tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          axisLine={false}
+          tickLine={false}
+        />
+        <YAxis
+          tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          axisLine={false}
+          tickLine={false}
+          allowDecimals={false}
+        />
+        <Tooltip
+          contentStyle={{
+            background: "var(--card)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            color: "var(--card-foreground)",
+            fontSize: "12px",
+            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+          }}
+        />
+        <Line
+          type="monotone"
+          dataKey="count"
+          stroke="#3b82f6"
+          strokeWidth={2}
+          dot={{ fill: "#3b82f6", r: 3 }}
+          activeDot={{ r: 5 }}
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ReportsSummaryCard({ counts }: { counts: { draft: number; final: number; amended: number } }) {
+  const total = counts.draft + counts.final + counts.amended;
+  return (
+    <Card className="h-full">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2">
+          <CheckCircle className="h-4 w-4 text-violet-500" />
+          Reports Summary
+        </CardTitle>
+        <CardDescription>Status of all radiology reports</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {total === 0 ? (
+          <div className="text-center py-6 text-muted-foreground">
+            <FileText className="h-8 w-8 mx-auto mb-2 opacity-40" />
+            <p className="text-sm">No reports yet</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800">
+              <div className="flex items-center gap-2">
+                <div className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+                <span className="text-sm font-medium text-amber-700 dark:text-amber-300">Draft</span>
+              </div>
+              <span className="text-lg font-bold text-amber-700 dark:text-amber-300">{counts.draft}</span>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-800">
+              <div className="flex items-center gap-2">
+                <div className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300">Final</span>
+              </div>
+              <span className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{counts.final}</span>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
+              <div className="flex items-center gap-2">
+                <div className="h-2.5 w-2.5 rounded-full bg-blue-400" />
+                <span className="text-sm font-medium text-blue-700 dark:text-blue-300">Amended</span>
+              </div>
+              <span className="text-lg font-bold text-blue-700 dark:text-blue-300">{counts.amended}</span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 const MODALITY_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#ec4899", "#06b6d4", "#84cc16"];
 
 export default function Dashboard() {
   const { user } = useAuth();
   const { data: stats, isLoading } = trpc.dashboard.stats.useQuery();
   const { data: recentStudies } = trpc.studies.list.useQuery();
+  const { data: reportsData } = trpc.reports.list.useQuery();
 
   const modalityData = recentStudies
     ? Object.entries(
@@ -105,6 +282,45 @@ export default function Dashboard() {
         .sort((a, b) => b.count - a.count)
         .slice(0, 8)
     : [];
+
+  const priorityCounts = recentStudies
+    ? recentStudies.reduce((acc, item) => {
+        const p = item.study.priority || "routine";
+        acc[p] = (acc[p] || 0) + 1;
+        return acc;
+      }, { routine: 0, urgent: 0, stat: 0 } as Record<string, number>)
+    : { routine: 0, urgent: 0, stat: 0 };
+
+  const statusData = recentStudies
+    ? Object.entries(
+        recentStudies.reduce((acc, item) => {
+          const s = item.study.status;
+          acc[s] = (acc[s] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>)
+      ).map(([status, value]) => ({ name: status.replace("_", " "), value, status }))
+    : [];
+
+  const today = new Date();
+  const last7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - (6 - i));
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  });
+  const studiesByDay: Record<string, number> = {};
+  last7Days.forEach(label => { studiesByDay[label] = 0; });
+  recentStudies?.forEach(item => {
+    const label = new Date(item.study.studyDate).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    if (label in studiesByDay) studiesByDay[label]++;
+  });
+  const trendData = last7Days.map(label => ({ day: label, count: studiesByDay[label] }));
+
+  const reportCounts = reportsData
+    ? reportsData.reduce((acc, item) => {
+        acc[item.report.status] = (acc[item.report.status] || 0) + 1;
+        return acc;
+      }, { draft: 0, final: 0, amended: 0 } as Record<string, number>)
+    : { draft: 0, final: 0, amended: 0 };
 
   const statCards = [
     {
@@ -180,67 +396,131 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* Modality Distribution Chart */}
+        {/* Priority Alert Bar */}
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.5, ease: "easeOut" }}
+          transition={{ duration: 0.5, delay: 0.45, ease: "easeOut" }}
         >
-          <Card>
-            <CardHeader>
-              <CardTitle>Study Distribution by Modality</CardTitle>
-              <CardDescription>Breakdown of imaging modalities across all studies</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {modalityData.length === 0 ? (
-                <div className="text-center py-10 text-muted-foreground">
-                  <Activity className="h-10 w-10 mx-auto mb-2 opacity-40" />
-                  <p className="text-sm">No study data available yet</p>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={modalityData} margin={{ top: 4, right: 4, bottom: 4, left: -20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                    <XAxis
-                      dataKey="modality"
-                      tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
-                      axisLine={false}
-                      tickLine={false}
-                      allowDecimals={false}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        background: "var(--card)",
-                        border: "1px solid var(--border)",
-                        borderRadius: "8px",
-                        color: "var(--card-foreground)",
-                        fontSize: "12px",
-                        boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-                      }}
-                      cursor={{ fill: "var(--accent)", opacity: 0.5 }}
-                    />
-                    <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                      {modalityData.map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={MODALITY_COLORS[index % MODALITY_COLORS.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
+          <PriorityAlertBar counts={priorityCounts as { routine: number; urgent: number; stat: number }} />
         </motion.div>
+
+        {/* Modality Chart + Status Donut */}
+        <div className="grid gap-4 md:grid-cols-2">
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.5, ease: "easeOut" }}
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle>Study Distribution by Modality</CardTitle>
+                <CardDescription>Breakdown of imaging modalities across all studies</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {modalityData.length === 0 ? (
+                  <div className="text-center py-10 text-muted-foreground">
+                    <Activity className="h-10 w-10 mx-auto mb-2 opacity-40" />
+                    <p className="text-sm">No study data available yet</p>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={modalityData} margin={{ top: 4, right: 4, bottom: 4, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis
+                        dataKey="modality"
+                        tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
+                        axisLine={false}
+                        tickLine={false}
+                        allowDecimals={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          background: "var(--card)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "8px",
+                          color: "var(--card-foreground)",
+                          fontSize: "12px",
+                          boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+                        }}
+                        cursor={{ fill: "var(--accent)", opacity: 0.5 }}
+                      />
+                      <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                        {modalityData.map((_, index) => (
+                          <Cell key={`cell-${index}`} fill={MODALITY_COLORS[index % MODALITY_COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.55, ease: "easeOut" }}
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle>Study Status Breakdown</CardTitle>
+                <CardDescription>Distribution across all workflow stages</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {statusData.length === 0 ? (
+                  <div className="text-center py-10 text-muted-foreground">
+                    <Activity className="h-10 w-10 mx-auto mb-2 opacity-40" />
+                    <p className="text-sm">No study data available yet</p>
+                  </div>
+                ) : (
+                  <StatusDonutChart data={statusData} />
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        </div>
+
+        {/* Studies Over Time + Reports Summary */}
+        <div className="grid gap-4 md:grid-cols-2">
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.6, ease: "easeOut" }}
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-blue-500" />
+                  Studies Over Time
+                </CardTitle>
+                <CardDescription>Study volume over the last 7 days</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <StudyTrendChart data={trendData} />
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.65, ease: "easeOut" }}
+          >
+            <ReportsSummaryCard counts={reportCounts as { draft: number; final: number; amended: number }} />
+          </motion.div>
+        </div>
 
         {/* Recent Studies */}
         <motion.div
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.6, ease: "easeOut" }}
+          transition={{ duration: 0.5, delay: 0.7, ease: "easeOut" }}
         >
           <Card>
             <CardHeader>

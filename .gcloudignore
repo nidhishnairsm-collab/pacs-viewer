@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+node_modules
+uploads/
+.claude/
+.manus/
+.ohif-source/
+*.log
+vitest.config.ts
