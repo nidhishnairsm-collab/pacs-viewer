@@ -7,6 +7,7 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  gcsBucket: process.env.GCS_BUCKET ?? "",
   // Directory containing the built OHIF static site (output of scripts/build-ohif.sh)
   ohifStaticDir: process.env.OHIF_STATIC_DIR ?? "ohif-dist",
 };

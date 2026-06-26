@@ -1,21 +1,19 @@
 import express, { Request, Response } from "express";
-import fs from "fs/promises";
-import path from "path";
 import { eq, and } from "drizzle-orm";
 import dicomParser from "dicom-parser";
-import { getDb } from "./db";
+import { getDb, canUserAccessStudy } from "./db";
 import { studies, series, instances, patients } from "../drizzle/schema";
 import type { Study, Series, Instance, Patient } from "../drizzle/schema";
 import { sdk } from "./_core/sdk";
+import { storageRead } from "./storage";
 
 const router = express.Router();
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 
-// Authenticate every DICOMweb request using the same session cookie as tRPC
+// Authenticate every DICOMweb request and attach user to req for access checks
 router.use(async (req, res, next) => {
   console.log(`[DICOMweb] ${req.method} ${req.path}`);
   try {
-    await sdk.authenticateRequest(req);
+    (req as any)._dicomUser = await sdk.authenticateRequest(req);
     next();
   } catch (e) {
     console.error(`[DICOMweb] Auth FAILED for ${req.method} ${req.path}:`, e);
@@ -54,8 +52,11 @@ router.get("/studies/:studyUID/series", async (req: Request, res: Response) => {
     if (!db) { res.status(503).json([]); return; }
 
     const { studyUID } = req.params;
-    const [study] = await db.select().from(studies).where(eq(studies.studyId, studyUID)).limit(1);
+    const study = await findStudy(db, studyUID);
     if (!study) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
+
+    const user = (req as any)._dicomUser;
+    if (!(await canUserAccessStudy(user, study.id))) { res.status(403).send("Forbidden"); return; }
 
     const rows = await db.select().from(series).where(eq(series.studyId, study.id));
 
@@ -74,7 +75,13 @@ router.get("/studies/:studyUID/series/:seriesUID/instances", async (req: Request
     if (!db) { res.status(503).json([]); return; }
 
     const { studyUID, seriesUID } = req.params;
-    const ser = await findSeries(db, studyUID, seriesUID);
+    const study = await findStudy(db, studyUID);
+    if (!study) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
+
+    const user = (req as any)._dicomUser;
+    if (!(await canUserAccessStudy(user, study.id))) { res.status(403).send("Forbidden"); return; }
+
+    const ser = await findSeriesInStudy(db, study.id, seriesUID);
     if (!ser) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
 
     const rows = await db.select().from(instances).where(eq(instances.seriesId, ser.id));
@@ -105,10 +112,6 @@ router.post("/studies/:studyUID", stowAck);
 // route, because Express matches in definition order and /:sopUID would swallow them.
 
 // GET /api/dicomweb/studies/:studyUID/series/:seriesUID/metadata
-// Returns DICOM JSON metadata for ALL instances in the series.
-// OHIF's RetrieveMetadataLoaderAsync calls client.retrieveSeriesMetadata() which
-// maps to this endpoint. Without it, dicomweb-client resolves with null →
-// storeInstances(null) → crash at instances.map.
 router.get(
   "/studies/:studyUID/series/:seriesUID/metadata",
   async (req: Request, res: Response) => {
@@ -117,7 +120,13 @@ router.get(
       if (!db) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
 
       const { studyUID, seriesUID } = req.params;
-      const ser = await findSeries(db, studyUID, seriesUID);
+      const study = await findStudy(db, studyUID);
+      if (!study) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
+
+      const user = (req as any)._dicomUser;
+      if (!(await canUserAccessStudy(user, study.id))) { res.status(403).send("Forbidden"); return; }
+
+      const ser = await findSeriesInStudy(db, study.id, seriesUID);
       if (!ser) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
 
       const rows = await db.select().from(instances).where(eq(instances.seriesId, ser.id));
@@ -125,12 +134,9 @@ router.get(
       const metadataArray: Record<string, unknown>[] = [];
       for (const inst of rows) {
         try {
-          const filePath = path.join(UPLOADS_DIR, inst.fileKey);
-          const fileBuffer = await fs.readFile(filePath);
+          const fileBuffer = await storageRead(inst.fileKey);
           metadataArray.push(parseDicomMetadata(fileBuffer));
         } catch {
-          // File missing: fall back to minimal QIDO-style metadata so OHIF can
-          // still enumerate the instance without crashing.
           metadataArray.push(instanceToJson(inst, seriesUID, studyUID, ser.modality ?? "OT"));
         }
       }
@@ -153,11 +159,16 @@ router.get(
       if (!db) { res.status(503).json([]); return; }
 
       const { studyUID, seriesUID, sopUID } = req.params;
-      const inst = await findInstance(db, studyUID, seriesUID, sopUID);
+      const study = await findStudy(db, studyUID);
+      if (!study) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
+
+      const user = (req as any)._dicomUser;
+      if (!(await canUserAccessStudy(user, study.id))) { res.status(403).send("Forbidden"); return; }
+
+      const inst = await findInstanceInStudy(db, study.id, seriesUID, sopUID);
       if (!inst) { res.setHeader("Content-Type", "application/dicom+json"); res.json([]); return; }
 
-      const filePath = path.join(UPLOADS_DIR, inst.fileKey);
-      const fileBuffer = await fs.readFile(filePath);
+      const fileBuffer = await storageRead(inst.fileKey);
 
       res.setHeader("Content-Type", "application/dicom+json");
       res.json([parseDicomMetadata(fileBuffer)]);
@@ -177,14 +188,18 @@ router.get(
       if (!db) { res.status(503).send("Service unavailable"); return; }
 
       const { studyUID, seriesUID, sopUID, frameList } = req.params;
-      // DICOM frames are 1-indexed; convert to 0-indexed
       const frameIndex = (parseInt(frameList.split(",")[0], 10) || 1) - 1;
 
-      const inst = await findInstance(db, studyUID, seriesUID, sopUID);
+      const study = await findStudy(db, studyUID);
+      if (!study) { res.status(404).send("Study not found"); return; }
+
+      const user = (req as any)._dicomUser;
+      if (!(await canUserAccessStudy(user, study.id))) { res.status(403).send("Forbidden"); return; }
+
+      const inst = await findInstanceInStudy(db, study.id, seriesUID, sopUID);
       if (!inst) { res.status(404).send("Instance not found"); return; }
 
-      const filePath = path.join(UPLOADS_DIR, inst.fileKey);
-      const fileBuffer = await fs.readFile(filePath);
+      const fileBuffer = await storageRead(inst.fileKey);
       const { data, transferSyntax } = extractFramePixelData(fileBuffer, frameIndex);
 
       const boundary = "DICOMwebBoundary";
@@ -213,11 +228,16 @@ router.get(
       if (!db) { res.status(503).send("Service unavailable"); return; }
 
       const { studyUID, seriesUID, sopUID } = req.params;
-      const inst = await findInstance(db, studyUID, seriesUID, sopUID);
+      const study = await findStudy(db, studyUID);
+      if (!study) { res.status(404).send("Study not found"); return; }
+
+      const user = (req as any)._dicomUser;
+      if (!(await canUserAccessStudy(user, study.id))) { res.status(403).send("Forbidden"); return; }
+
+      const inst = await findInstanceInStudy(db, study.id, seriesUID, sopUID);
       if (!inst) { res.status(404).send("Instance not found"); return; }
 
-      const filePath = path.join(UPLOADS_DIR, inst.fileKey);
-      const fileBuffer = await fs.readFile(filePath);
+      const fileBuffer = await storageRead(inst.fileKey);
 
       const boundary = "DICOMwebBoundary";
       res.setHeader(
@@ -237,30 +257,33 @@ export default router;
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+type StudyRow = { id: number; studyId: string };
 
-async function findSeries(db: Db, studyUID: string, seriesUID: string): Promise<Series | null> {
+async function findStudy(db: Db, studyUID: string): Promise<StudyRow | null> {
   const [study] = await db
-    .select({ id: studies.id })
+    .select({ id: studies.id, studyId: studies.studyId })
     .from(studies)
     .where(eq(studies.studyId, studyUID))
     .limit(1);
-  if (!study) return null;
+  return study ?? null;
+}
 
+async function findSeriesInStudy(db: Db, studyDbId: number, seriesUID: string): Promise<Series | null> {
   const [ser] = await db
     .select()
     .from(series)
-    .where(and(eq(series.studyId, study.id), eq(series.seriesId, seriesUID)))
+    .where(and(eq(series.studyId, studyDbId), eq(series.seriesId, seriesUID)))
     .limit(1);
   return ser ?? null;
 }
 
-async function findInstance(
+async function findInstanceInStudy(
   db: Db,
-  studyUID: string,
+  studyDbId: number,
   seriesUID: string,
   sopUID: string
 ): Promise<Instance | null> {
-  const ser = await findSeries(db, studyUID, seriesUID);
+  const ser = await findSeriesInStudy(db, studyDbId, seriesUID);
   if (!ser) return null;
 
   const [inst] = await db

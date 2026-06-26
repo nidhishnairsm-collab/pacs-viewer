@@ -43,8 +43,10 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  // Serve locally uploaded DICOM files
-  app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+  // Serve local DICOM uploads in dev (GCS handles this in production)
+  if (!ENV.gcsBucket) {
+    app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+  }
   // OAuth routes (no-op locally)
   registerOAuthRoutes(app);
 
@@ -230,11 +232,11 @@ async function startServer() {
           const patientRecord = await db.createPatient({
             patientId: dicomPatientId,
             name: patient.name,
-            dateOfBirth: patient.dateOfBirth,
+            dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.toISOString().split('T')[0] : undefined,
             gender: patient.gender,
             createdBy: user.id,
           });
-          patientId = Number((patientRecord as any)[0]?.insertId ?? (patientRecord as any).insertId);
+          patientId = patientRecord.id;
         }
 
         // Skip studies that were already uploaded (same Study Instance UID).
@@ -261,7 +263,7 @@ async function startServer() {
           uploadedBy: user.id,
           priority,
         });
-        const dbStudyId = Number((studyRecord as any)[0]?.insertId ?? (studyRecord as any).insertId);
+        const dbStudyId = studyRecord.id;
         studyIds.push(dbStudyId);
 
         for (const [seriesUID, seriesEntry] of Array.from(studyEntry.series)) {
@@ -271,10 +273,10 @@ async function startServer() {
             modality: seriesEntry.modality,
             numberOfInstances: seriesEntry.files.length,
           });
-          const dbSeriesId = Number((seriesRecord as any)[0]?.insertId ?? (seriesRecord as any).insertId);
+          const dbSeriesId = seriesRecord.id;
 
           for (const inst of seriesEntry.files) {
-            const relKey = `dicom/${studyUID}/${inst.sopUID}.dcm`;
+            const relKey = `dicom/${user.id}/${studyUID}/${inst.sopUID}.dcm`;
             const stored = await storagePut(relKey, inst.buffer, "application/dicom");
             await db.createInstance({
               sopInstanceUID: inst.sopUID,
@@ -286,20 +288,26 @@ async function startServer() {
             });
           }
 
-          // Auto-create a report from SR series
+          // Auto-create a report from SR series (only if no report exists yet for this study)
           if (seriesEntry.modality === "SR" && seriesEntry.files.length > 0) {
             try {
-              const srDataset = dicomParser.parseDicom(new Uint8Array(seriesEntry.files[0].buffer));
-              const { findings, impression } = extractSrReport(srDataset);
-              if (findings) {
-                await db.createReport({
-                  studyId: dbStudyId,
-                  reportedBy: user.id,
-                  findings,
-                  impression,
-                  status: "final",
-                });
-                console.log("[Upload] Auto-created report from SR series for study", studyUID);
+              const existingSrReports = await db.getReportsByStudyId(dbStudyId);
+              if (!existingSrReports || existingSrReports.length === 0) {
+                const srDataset = dicomParser.parseDicom(new Uint8Array(seriesEntry.files[0].buffer));
+                const { findings, impression } = extractSrReport(srDataset);
+                if (findings) {
+                  await db.createReport({
+                    studyId: dbStudyId,
+                    reportedBy: user.id,
+                    findings,
+                    impression,
+                    status: "final",
+                  });
+                  await db.updateStudy(dbStudyId, { status: "reported" });
+                  console.log("[Upload] Auto-created report from SR series for study", studyUID);
+                }
+              } else {
+                console.log("[Upload] Skipping SR report — report already exists for study", studyUID);
               }
             } catch (e) {
               console.error("[Upload] Failed to extract SR report:", e);

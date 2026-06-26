@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import * as db from "./db";
+import { canUserAccessStudy } from "./db";
 import { doctorPatientRouter, studySharingRouter, uploadTokenRouter } from "./routers/doctorPatient";
 
 export const appRouter = router({
@@ -113,23 +114,23 @@ export const appRouter = router({
 
   // Dashboard router
   dashboard: router({
-    stats: protectedProcedure.query(async () => {
-      return await db.getDashboardStats();
+    stats: protectedProcedure.query(async ({ ctx }) => {
+      return await db.getDashboardStatsForUser(ctx.user);
     }),
   }),
 
   // Patients router
   patients: router({
-    list: protectedProcedure.query(async () => {
-      return await db.getAllPatients();
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return await db.getPatientsForUser(ctx.user);
     }),
-    
+
     search: protectedProcedure
       .input(z.object({ searchTerm: z.string() }))
-      .query(async ({ input }) => {
-        return await db.searchPatients(input.searchTerm);
+      .query(async ({ input, ctx }) => {
+        return await db.searchPatientsForUser(ctx.user, input.searchTerm);
       }),
-    
+
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
@@ -150,10 +151,11 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         return await db.createPatient({
           ...input,
+          dateOfBirth: input.dateOfBirth ? input.dateOfBirth.toISOString().split('T')[0] : undefined,
           createdBy: ctx.user.id,
         });
       }),
-    
+
     update: protectedProcedure
       .input(z.object({
         id: z.number(),
@@ -168,23 +170,40 @@ export const appRouter = router({
         }),
       }))
       .mutation(async ({ input }) => {
-        await db.updatePatient(input.id, input.data);
+        const { dateOfBirth, ...rest } = input.data;
+        await db.updatePatient(input.id, {
+          ...rest,
+          dateOfBirth: dateOfBirth ? dateOfBirth.toISOString().split('T')[0] : undefined,
+        });
+        return { success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin" && ctx.user.role !== "doctor") {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+        await db.deletePatient(input.id);
         return { success: true };
       }),
   }),
 
   // Studies router
   studies: router({
-    list: protectedProcedure.query(async () => {
-      return await db.getAllStudies();
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return await db.getStudiesForUser(ctx.user);
     }),
-    
+
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
+        if (!(await canUserAccessStudy(ctx.user, input.id))) {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
         return await db.getStudyById(input.id);
       }),
-    
+
     getByPatientId: protectedProcedure
       .input(z.object({ patientId: z.number() }))
       .query(async ({ input }) => {
@@ -229,9 +248,22 @@ export const appRouter = router({
         // 1. Parse DICOM files and extract metadata
         // 2. Upload files to S3 using storagePut
         // 3. Create study/series/instance records
-        
+
         // For now, return a placeholder study ID
         return { studyId: 1, success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") {
+          const studyData = await db.getStudyById(input.id);
+          if (!studyData || studyData.study.uploadedBy !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN" });
+          }
+        }
+        await db.deleteStudy(input.id);
+        return { success: true };
       }),
   }),
 
@@ -253,7 +285,10 @@ export const appRouter = router({
       }),
     getByStudyId: protectedProcedure
       .input(z.object({ studyId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
+        if (!(await canUserAccessStudy(ctx.user, input.studyId))) {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
         return await db.getInstancesByStudyId(input.studyId);
       }),
   }),
@@ -275,8 +310,8 @@ export const appRouter = router({
         return await db.getReportsByStudyId(input.studyId);
       }),
 
-    list: protectedProcedure.query(async () => {
-      return await db.getAllReports();
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return await db.getReportsForUser(ctx.user);
     }),
 
     create: protectedProcedure
@@ -302,6 +337,16 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
         await db.updateReport(id, data);
+        return { success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin" && ctx.user.role !== "doctor") {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+        await db.deleteReport(input.id);
         return { success: true };
       }),
   }),

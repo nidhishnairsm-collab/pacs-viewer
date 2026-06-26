@@ -1,41 +1,37 @@
-// Deletes all uploaded study data from the database and disk.
+// Deletes all data from the database (study data + optionally users).
 // Run from project root: node --env-file=.env scripts/clear-studies.mjs
-import { drizzle } from "drizzle-orm/mysql2";
+// To also wipe the users table: node --env-file=.env scripts/clear-studies.mjs --all
+import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { rm } from "fs/promises";
-import { join } from "path";
-import { fileURLToPath } from "url";
-import { dirname } from "path";
+import pkg from "pg";
+const { Pool } = pkg;
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const wipeAll = process.argv.includes("--all");
 
-const db = drizzle(process.env.DATABASE_URL);
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(pool);
 
-const tables = [
+// Order matters for FK constraints — truncate children before parents.
+// CASCADE handles any remaining FK deps.
+const studyTables = [
   "instances",
   "series",
   "reports",
   "study_access",
   "upload_tokens",
   "studies",
+  "doctor_patients",
   "patients",
 ];
 
-console.log("Clearing database tables...");
-await db.execute(sql`SET FOREIGN_KEY_CHECKS=0`);
+const allTables = [...studyTables, "users"];
+const tables = wipeAll ? allTables : studyTables;
+
+console.log(`Clearing tables${wipeAll ? " (including users)" : ""}...`);
 for (const table of tables) {
-  await db.execute(sql.raw(`TRUNCATE TABLE \`${table}\``));
+  await db.execute(sql.raw(`TRUNCATE TABLE "${table}" CASCADE`));
   console.log(`  ✓ ${table}`);
 }
-await db.execute(sql`SET FOREIGN_KEY_CHECKS=1`);
 
-console.log("Deleting uploaded files...");
-const uploadsDir = join(__dirname, "..", "uploads", "dicom");
-try {
-  await rm(uploadsDir, { recursive: true, force: true });
-  console.log("  ✓ uploads/dicom/");
-} catch {
-  console.log("  (uploads/dicom/ not found, skipping)");
-}
-
+await pool.end();
 console.log("Done.");

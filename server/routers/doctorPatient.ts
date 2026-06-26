@@ -148,7 +148,7 @@ export const uploadTokenRouter = router({
         patientName: input.patientName,
         patientEmail: input.patientEmail,
         expiresAt,
-        isActive: 1,
+        isActive: true,
       });
       
       return {
@@ -192,7 +192,7 @@ export const uploadTokenRouter = router({
       }
       
       // Check if token is still active
-      if (tokenData.isActive === 0) {
+      if (!tokenData.isActive) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Upload token has already been used",
