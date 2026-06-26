@@ -6,9 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye, Maximize2, Loader2 } from "lucide-react";
+import { ArrowLeft, Calendar, User, FileText, Download, Share2, Eye, Maximize2, Loader2, History, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { exportReportPdf } from "@/lib/reportPdf";
 import { EnhancedDicomViewer } from "@/components/EnhancedDicomViewer";
 import dicomParser from "dicom-parser";
@@ -119,8 +120,11 @@ export default function StudyDetail() {
   const [impression, setImpression] = useState("");
   const [recommendations, setRecommendations] = useState("");
   const [editingReportId, setEditingReportId] = useState<number | null>(null);
+  const [isAmending, setIsAmending] = useState(false);
+  const [showReportHistory, setShowReportHistory] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const { data: studyData, isLoading } = trpc.studies.getById.useQuery(
+  const { data: studyData, isLoading, refetch: refetchStudy } = trpc.studies.getById.useQuery(
     { id: studyId! },
     { enabled: !!studyId }
   );
@@ -139,34 +143,90 @@ export default function StudyDetail() {
   );
 
   const createReport = trpc.reports.create.useMutation({
-    onSuccess: () => { toast.success("Report saved"); refetchReports(); },
     onError: (e) => toast.error(e.message),
   });
   const updateReport = trpc.reports.update.useMutation({
-    onSuccess: () => { toast.success("Report updated"); refetchReports(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const updateStudyStatus = trpc.studies.updateStatus.useMutation({
+    onSuccess: () => refetchStudy(),
+  });
+
+  const deleteStudy = trpc.studies.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Study deleted");
+      setLocation("/studies");
+    },
     onError: (e) => toast.error(e.message),
   });
 
   useEffect(() => {
-    if (!existingReports) return;
+    if (!existingReports || findings !== "") return;
     const draft = existingReports.find(r => r.status === "draft");
-    if (draft && findings === "") {
+    if (draft) {
       setFindings(draft.findings);
       setImpression(draft.impression);
       setRecommendations(draft.recommendations ?? "");
       setEditingReportId(draft.id);
+      setIsAmending(false);
+    } else if (existingReports.length > 0) {
+      // Load latest final/amended report for potential amendment (reports ordered desc by createdAt)
+      const latest = existingReports[0];
+      setFindings(latest.findings);
+      setImpression(latest.impression);
+      setRecommendations(latest.recommendations ?? "");
+      setEditingReportId(latest.id);
+      setIsAmending(true);
     }
   }, [existingReports]);
 
-  const handleSaveReport = (status: "draft" | "final") => {
+  const handleSaveReport = async (status: "draft" | "final") => {
     if (!findings.trim() || !impression.trim()) {
       toast.error("Findings and Impression are required");
       return;
     }
-    if (editingReportId) {
-      updateReport.mutate({ id: editingReportId, findings, impression, recommendations: recommendations || undefined, status });
-    } else if (studyId) {
-      createReport.mutate({ studyId, findings, impression, recommendations: recommendations || undefined, status });
+    try {
+      if (isAmending && status === "final") {
+        // Mark existing report as superseded, create new amendment
+        await updateReport.mutateAsync({ id: editingReportId!, status: "amended" });
+        await createReport.mutateAsync({ studyId: studyId!, findings, impression, recommendations: recommendations || undefined, status: "amended" });
+        // Reset so useEffect repopulates from the new final report
+        setFindings("");
+        setImpression("");
+        setRecommendations("");
+        setEditingReportId(null);
+        setIsAmending(false);
+        toast.success("Report amended");
+      } else if (isAmending && status === "draft") {
+        // Create a new draft without touching the existing final report
+        const row = await createReport.mutateAsync({ studyId: studyId!, findings, impression, recommendations: recommendations || undefined, status: "draft" });
+        setEditingReportId(row?.id ?? null);
+        setIsAmending(false);
+        toast.success("Draft saved");
+      } else if (editingReportId) {
+        await updateReport.mutateAsync({ id: editingReportId, findings, impression, recommendations: recommendations || undefined, status });
+        if (status === "final") {
+          setIsAmending(true);
+          toast.success("Report finalized");
+        } else {
+          toast.success("Draft saved");
+        }
+      } else if (studyId) {
+        const row = await createReport.mutateAsync({ studyId, findings, impression, recommendations: recommendations || undefined, status });
+        setEditingReportId(row?.id ?? null);
+        if (status === "final") {
+          setIsAmending(true);
+          toast.success("Report finalized");
+        } else {
+          toast.success("Draft saved");
+        }
+      }
+      refetchReports();
+      if (status === "final" && studyId) {
+        updateStudyStatus.mutate({ id: studyId, status: "reported" });
+      }
+    } catch {
+      // errors handled by mutation onError
     }
   };
 
@@ -236,6 +296,15 @@ export default function StudyDetail() {
               <Button variant="outline" size="sm" className="border-border">
                 <Download className="w-4 h-4 mr-2" />
                 Download
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                onClick={() => setShowDeleteDialog(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete
               </Button>
             </div>
           </div>
@@ -418,44 +487,115 @@ export default function StudyDetail() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {existingReports?.filter(r => r.status !== "draft").map(report => (
-                  <div key={report.id} className="space-y-4 border border-border rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline" className="capitalize">{report.status}</Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(report.createdAt).toLocaleString()}
-                        </span>
+                {(() => {
+                  const nonDrafts = existingReports?.filter(r => r.status !== "draft") ?? [];
+                  if (nonDrafts.length === 0) return null;
+                  const current = nonDrafts[0];
+                  const history = nonDrafts.slice(1);
+                  return (
+                    <>
+                      {/* Current version */}
+                      <div className="space-y-4 border border-border rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="capitalize">{current.status}</Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(current.createdAt).toLocaleString()}
+                            </span>
+                            {history.length > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                · Version {history.length + 1}
+                              </span>
+                            )}
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => exportReportPdf({ patient: patient ?? null, study: study ?? null, report: current, radiologistName: current.radiologistName ?? null })}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            Export PDF
+                          </Button>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-muted-foreground mb-1">Findings</h4>
+                          <p className="text-foreground whitespace-pre-wrap">{current.findings}</p>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-muted-foreground mb-1">Impression</h4>
+                          <p className="text-foreground whitespace-pre-wrap">{current.impression}</p>
+                        </div>
+                        {current.recommendations && (
+                          <div>
+                            <h4 className="text-sm font-semibold text-muted-foreground mb-1">Recommendations</h4>
+                            <p className="text-foreground whitespace-pre-wrap">{current.recommendations}</p>
+                          </div>
+                        )}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => exportReportPdf({ patient: patient ?? null, study: study ?? null, report })}
-                      >
-                        <Download className="h-4 w-4 mr-1" />
-                        Export PDF
-                      </Button>
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-semibold text-muted-foreground mb-1">Findings</h4>
-                      <p className="text-foreground whitespace-pre-wrap">{report.findings}</p>
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-semibold text-muted-foreground mb-1">Impression</h4>
-                      <p className="text-foreground whitespace-pre-wrap">{report.impression}</p>
-                    </div>
-                    {report.recommendations && (
-                      <div>
-                        <h4 className="text-sm font-semibold text-muted-foreground mb-1">Recommendations</h4>
-                        <p className="text-foreground whitespace-pre-wrap">{report.recommendations}</p>
-                      </div>
-                    )}
-                  </div>
-                ))}
+
+                      {/* Previous versions toggle */}
+                      {history.length > 0 && (
+                        <div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="gap-2 text-muted-foreground"
+                            onClick={() => setShowReportHistory(h => !h)}
+                          >
+                            <History className="h-4 w-4" />
+                            {history.length} previous version{history.length > 1 ? "s" : ""}
+                            {showReportHistory ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </Button>
+                          {showReportHistory && (
+                            <div className="space-y-3 mt-3 pl-4 border-l-2 border-border">
+                              {history.map((report, idx) => (
+                                <div key={report.id} className="space-y-3 border border-border rounded-lg p-4 bg-muted/20">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="outline" className="capitalize text-muted-foreground">{report.status}</Badge>
+                                      <span className="text-xs text-muted-foreground">
+                                        {new Date(report.createdAt).toLocaleString()}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        · Version {history.length - idx}
+                                      </span>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => exportReportPdf({ patient: patient ?? null, study: study ?? null, report, radiologistName: report.radiologistName ?? null })}
+                                    >
+                                      <Download className="h-4 w-4 mr-1" />
+                                      PDF
+                                    </Button>
+                                  </div>
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-muted-foreground mb-1">Findings</h4>
+                                    <p className="text-sm text-foreground/70 whitespace-pre-wrap">{report.findings}</p>
+                                  </div>
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-muted-foreground mb-1">Impression</h4>
+                                    <p className="text-sm text-foreground/70 whitespace-pre-wrap">{report.impression}</p>
+                                  </div>
+                                  {report.recommendations && (
+                                    <div>
+                                      <h4 className="text-sm font-semibold text-muted-foreground mb-1">Recommendations</h4>
+                                      <p className="text-sm text-foreground/70 whitespace-pre-wrap">{report.recommendations}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
 
                 <div className="space-y-4">
                   <h3 className="font-semibold text-foreground">
-                    {editingReportId ? "Edit Draft Report" : "New Report"}
+                    {isAmending ? "Amend Report" : editingReportId ? "Edit Draft Report" : "New Report"}
                   </h3>
                   <div className="space-y-1">
                     <Label htmlFor="findings">Findings *</Label>
@@ -502,7 +642,7 @@ export default function StudyDetail() {
                       onClick={() => handleSaveReport("final")}
                       disabled={createReport.isPending || updateReport.isPending}
                     >
-                      Finalize Report
+                      {isAmending ? "Submit Amendment" : "Finalize Report"}
                     </Button>
                   </div>
                 </div>
@@ -511,6 +651,29 @@ export default function StudyDetail() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Study</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete <strong>{study?.description || "this study"}</strong> and all associated series, images, and reports. This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={deleteStudy.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => studyId && deleteStudy.mutate({ id: studyId })}
+              disabled={deleteStudy.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

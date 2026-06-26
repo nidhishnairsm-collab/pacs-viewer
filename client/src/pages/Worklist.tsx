@@ -144,7 +144,6 @@ export default function Worklist() {
         accessLevel: item.access?.accessLevel ?? "view",
       }))
     : (allStudies ?? [])
-        .filter(item => item.study.status === "pending" || item.study.status === "in_progress")
         .map(item => ({
           id: item.study.id,
           patient: item.patient?.name ?? "Unknown",
@@ -171,7 +170,7 @@ export default function Worklist() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Worklist</h1>
           <p className="text-muted-foreground mt-1">
-            {isDoctor ? "Studies shared with you for review" : "Pending and in-progress studies"}
+            {isDoctor ? "Studies shared with you for review" : "All studies"}
           </p>
         </div>
 

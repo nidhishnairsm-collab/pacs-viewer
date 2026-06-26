@@ -1,1 +1,0 @@
-ALTER TABLE `patients` MODIFY COLUMN `dateOfBirth` date;
